@@ -24,13 +24,13 @@
       --text-primary: #ffffff;
       --text-secondary: #a1a1aa;
       --text-muted: #71717a;
-      --accent-primary: #8b5cf6;
+      --accent-primary: #3b82f6;
       --accent-secondary: #06b6d4;
       --accent-success: #10b981;
       --accent-warning: #f59e0b;
       --accent-danger: #ef4444;
-      --glow-purple: rgba(139, 92, 246, 0.15);
-      --glow-cyan: rgba(6, 182, 212, 0.15);
+      --glow-primary: rgba(59, 130, 246, 0.12);
+      --glow-cyan: rgba(6, 182, 212, 0.12);
     }
 
     body {
@@ -41,18 +41,19 @@
       overflow-x: hidden;
     }
 
-    /* Animated background gradient */
+    /* Subtle background gradient */
     body::before {
       content: '';
       position: fixed;
       top: 0;
       left: 0;
       right: 0;
-      height: 500px;
-      background: radial-gradient(ellipse 80% 50% at 50% -20%, var(--glow-purple), transparent),
-                  radial-gradient(ellipse 60% 40% at 80% 0%, var(--glow-cyan), transparent);
+      height: 400px;
+      background: radial-gradient(ellipse 80% 50% at 50% -30%, var(--glow-primary), transparent),
+                  radial-gradient(ellipse 50% 30% at 80% 0%, var(--glow-cyan), transparent);
       pointer-events: none;
       z-index: 0;
+      opacity: 0.8;
     }
 
     .header {
@@ -83,7 +84,7 @@
       align-items: center;
       justify-content: center;
       font-size: 1.25rem;
-      box-shadow: 0 4px 20px var(--glow-purple);
+      box-shadow: 0 4px 16px var(--glow-primary);
     }
 
     .logo-text h1 {
@@ -204,8 +205,8 @@
     }
 
     .agent-avatar.manager {
-      background: linear-gradient(135deg, #7c3aed, #a855f7);
-      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
     }
     .agent-avatar.specialist {
       background: linear-gradient(135deg, #2563eb, #3b82f6);
@@ -278,12 +279,12 @@
     .run-agent-form input:focus {
       outline: none;
       border-color: var(--accent-primary);
-      box-shadow: 0 0 0 3px var(--glow-purple);
+      box-shadow: 0 0 0 3px var(--glow-primary);
     }
 
     .run-agent-form button {
       padding: 0.625rem 1rem;
-      background: linear-gradient(135deg, var(--accent-primary), #7c3aed);
+      background: linear-gradient(135deg, var(--accent-primary), #2563eb);
       border: none;
       border-radius: 8px;
       color: white;
@@ -295,7 +296,7 @@
 
     .run-agent-form button:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 20px var(--glow-purple);
+      box-shadow: 0 4px 16px var(--glow-primary);
     }
 
     .run-agent-form button:disabled {
@@ -540,7 +541,7 @@
     .add-task-btn:hover {
       border-color: var(--accent-primary);
       color: var(--accent-primary);
-      background: var(--glow-purple);
+      background: var(--glow-primary);
     }
 
     /* Modal */
@@ -613,7 +614,7 @@
     .form-group select:focus {
       outline: none;
       border-color: var(--accent-primary);
-      box-shadow: 0 0 0 3px var(--glow-purple);
+      box-shadow: 0 0 0 3px var(--glow-primary);
     }
 
     .form-group textarea {
@@ -650,14 +651,14 @@
     }
 
     .btn-primary {
-      background: linear-gradient(135deg, var(--accent-primary), #7c3aed);
+      background: linear-gradient(135deg, var(--accent-primary), #2563eb);
       border: none;
       color: white;
     }
 
     .btn-primary:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 20px var(--glow-purple);
+      box-shadow: 0 4px 16px var(--glow-primary);
     }
 
     .loading {
