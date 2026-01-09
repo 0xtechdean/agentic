@@ -45,11 +45,13 @@ export class SlackService {
   /**
    * Create a channel for an agent task
    * Channel name format: task-{agentName}-{taskId}
+   * @param startedByUserId - Optional Slack user ID to tag and invite
    */
   async createTaskChannel(
     agentName: string,
     taskId: string,
-    taskTitle: string
+    taskTitle: string,
+    startedByUserId?: string
   ): Promise<SlackChannel | null> {
     if (!this.token) return null;
 
@@ -77,13 +79,43 @@ export class SlackService {
       const channel = createResponse.channel as SlackChannel;
       console.log(`[Slack] Created channel: #${channelName}`);
 
-      // Post initial message with task context
-      await this.postMessage(channel.id, this.formatTaskStartMessage(agentName, taskTitle, taskId));
+      // Invite the user who started the task
+      if (startedByUserId) {
+        await this.inviteUserToChannel(channel.id, startedByUserId);
+      }
+
+      // Post initial message with task context and tag the user
+      await this.postMessage(
+        channel.id,
+        this.formatTaskStartMessage(agentName, taskTitle, taskId, startedByUserId)
+      );
 
       return channel;
     } catch (error) {
       console.error('[Slack] Error creating channel:', error);
       return null;
+    }
+  }
+
+  /**
+   * Invite a user to a channel
+   */
+  async inviteUserToChannel(channelId: string, userId: string): Promise<boolean> {
+    if (!this.token) return false;
+
+    try {
+      const response = await this.apiCall('conversations.invite', {
+        channel: channelId,
+        users: userId,
+      });
+
+      if (response.ok) {
+        console.log(`[Slack] Invited user ${userId} to channel`);
+      }
+      return response.ok;
+    } catch (error) {
+      console.error('[Slack] Error inviting user:', error);
+      return false;
     }
   }
 
@@ -316,12 +348,23 @@ export class SlackService {
   /**
    * Format the initial task message
    */
-  private formatTaskStartMessage(agentName: string, taskTitle: string, taskId: string): string {
-    return `🤖 *Agent ${agentName}* is starting work on this task
+  private formatTaskStartMessage(
+    agentName: string,
+    taskTitle: string,
+    taskId: string,
+    startedByUserId?: string
+  ): string {
+    const userMention = startedByUserId ? `<@${startedByUserId}>` : '';
+    const greeting = startedByUserId
+      ? `Hey ${userMention}! 👋\n\n`
+      : '';
+
+    return `${greeting}🤖 *Agent ${agentName}* is starting work on this task
 
 *Task:* ${taskTitle}
 *Task ID:* \`${taskId}\`
 *Status:* In Progress
+${startedByUserId ? `*Requested by:* ${userMention}` : ''}
 
 ---
 Use this channel to communicate with the agent about this task.
