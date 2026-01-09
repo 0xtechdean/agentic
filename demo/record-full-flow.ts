@@ -71,19 +71,40 @@ async function recordDemo() {
 
   const taskId = Math.random().toString(36).substring(2, 8);
 
+  // Smaller, friendlier size
+  const WIDTH = 1280;
+  const HEIGHT = 720;
+
   const browser = await puppeteer.launch({
     headless: false,
     defaultViewport: null,
-    args: ['--window-size=1500,900', '--window-position=0,0']
+    args: [`--window-size=${WIDTH},${HEIGHT}`, '--window-position=0,0']
   });
 
   const page = await browser.newPage();
-  await page.setViewport({ width: 1500, height: 900 });
+  await page.setViewport({ width: WIDTH, height: HEIGHT });
 
+  // Load page and prepare UI BEFORE recording
+  console.log('Preparing scene...');
+  await page.goto(DASHBOARD_URL, { waitUntil: 'networkidle0' });
+  await sleep(500);
+
+  // Add title overlay before recording starts
+  await page.evaluate(() => {
+    const title = document.createElement('div');
+    title.id = 'demo-title';
+    title.innerHTML = `<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.85);color:white;padding:8px 18px;border-radius:8px;font-family:-apple-system,sans-serif;font-size:15px;font-weight:600;z-index:10000;">
+      🤖 AI Team Orchestrator
+    </div>`;
+    document.body.appendChild(title);
+  });
+  await sleep(300);
+
+  // NOW start recording with clean slate
   const recorder = new PuppeteerScreenRecorder(page, {
     followNewTab: true,
     fps: 30,
-    videoFrame: { width: 1500, height: 900 },
+    videoFrame: { width: WIDTH, height: HEIGHT },
   });
 
   const videoPath = './demo/demo-full-flow.mp4';
@@ -91,21 +112,9 @@ async function recordDemo() {
   console.log('📹 Recording started...');
 
   try {
-    // Scene 1: Show dashboard with tasks
+    // Scene 1: Show dashboard with tasks (already loaded and ready)
     console.log('Scene 1: Dashboard with tasks');
-    await page.goto(DASHBOARD_URL, { waitUntil: 'networkidle0' });
     await sleep(2000);
-
-    // Add title
-    await page.evaluate(() => {
-      const title = document.createElement('div');
-      title.id = 'demo-title';
-      title.innerHTML = `<div style="position:fixed;top:15px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.85);color:white;padding:10px 20px;border-radius:8px;font-family:-apple-system,sans-serif;font-size:16px;font-weight:600;z-index:10000;">
-        🤖 AI Team Orchestrator
-      </div>`;
-      document.body.appendChild(title);
-    });
-    await sleep(2500);
 
     // Scene 2: Highlight a task and move it to ready
     console.log('Scene 2: Move task to Ready');
@@ -392,11 +401,11 @@ I'll keep you updated on progress here!`);
   console.log(`\n✅ Recording saved: ${videoPath}`);
   await browser.close();
 
-  // Convert to GIF
+  // Convert to GIF - friendlier 800px width
   console.log('🎨 Converting to GIF...');
   const { execSync } = await import('child_process');
   try {
-    execSync(`ffmpeg -y -i ${videoPath} -vf "fps=12,scale=900:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" -loop 0 ./demo/demo.gif`, {
+    execSync(`ffmpeg -y -i ${videoPath} -vf "fps=10,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" -loop 0 ./demo/demo.gif`, {
       stdio: 'inherit'
     });
     const { statSync } = await import('fs');
