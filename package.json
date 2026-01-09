@@ -22,12 +22,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "croner": "^8.1.2",
-    "dotenv": "^16.4.7",
+    "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "ioredis": "^5.4.2",
     "mem0ai": "^1.0.15"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "tsx": "^4.19.2",

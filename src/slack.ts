@@ -153,6 +153,27 @@ export class SlackService {
   }
 
   /**
+   * Join a channel (required before reading messages)
+   */
+  async joinChannel(channelId: string): Promise<boolean> {
+    if (!this.token) return false;
+
+    try {
+      const response = await this.apiCall('conversations.join', {
+        channel: channelId,
+      });
+
+      if (response.ok) {
+        console.log(`[Slack] Joined channel ${channelId}`);
+      }
+      return response.ok;
+    } catch (error) {
+      console.error('[Slack] Error joining channel:', error);
+      return false;
+    }
+  }
+
+  /**
    * Read messages from a channel
    * @param channelId - The channel to read from
    * @param limit - Maximum number of messages to retrieve (default: 20)
@@ -174,7 +195,13 @@ export class SlackService {
         params.oldest = oldest;
       }
 
-      const response = await this.apiCall('conversations.history', params);
+      let response = await this.apiCall('conversations.history', params);
+
+      // Auto-join if not in channel
+      if (!response.ok && response.error === 'not_in_channel') {
+        await this.joinChannel(channelId);
+        response = await this.apiCall('conversations.history', params);
+      }
 
       if (!response.ok || !response.messages) {
         console.error('[Slack] Failed to read messages:', response.error);

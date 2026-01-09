@@ -300,6 +300,11 @@ class AgentRegistry {
     return this.memAgents.get(id) || null;
   }
 
+  async getAgentPerformance(id: string): Promise<AgentPerformance | null> {
+    const agent = await this.getAgent(id);
+    return agent?.performance || null;
+  }
+
   async listAgents(): Promise<AgentDefinition[]> {
     if (this.redis) {
       const ids = await this.redis.smembers(this.allAgentsKey());
