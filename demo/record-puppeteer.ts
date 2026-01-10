@@ -9,7 +9,6 @@ async function sleep(ms: number) {
 }
 
 async function clearData() {
-  // Clear existing tasks
   try {
     const tasksRes = await fetch(`${API_URL}/projects/default/tasks`);
     const tasks = await tasksRes.json();
@@ -29,27 +28,24 @@ async function createDemoData() {
     });
   } catch (e) {}
 
-  // Create tasks with different statuses for a realistic board
+  // Create tasks - more in progress to show monitoring
   const tasks = [
-    // Done tasks
+    // Done
     { title: 'Set up project structure', owner: 'engineering', priority: 'P1', status: 'done' },
     { title: 'Design database schema', owner: 'engineering', priority: 'P1', status: 'done' },
-    { title: 'Create initial wireframes', owner: 'marketing', priority: 'P2', status: 'done' },
 
-    // In Progress
+    // In Progress - multiple to show monitoring
     { title: 'Implement user authentication', owner: 'engineering', priority: 'P1', status: 'in_progress' },
     { title: 'Build analytics dashboard', owner: 'data', priority: 'P2', status: 'in_progress' },
+    { title: 'Create marketing website', owner: 'marketing', priority: 'P1', status: 'in_progress' },
 
     // Ready
-    { title: 'Create landing page', owner: 'marketing', priority: 'P1', status: 'ready' },
     { title: 'Write API documentation', owner: 'pm', priority: 'P2', status: 'ready' },
-    { title: 'Set up monitoring alerts', owner: 'engineering', priority: 'P2', status: 'ready' },
+    { title: 'Set up CI/CD pipeline', owner: 'engineering', priority: 'P2', status: 'ready' },
 
     // Backlog
     { title: 'Implement payment integration', owner: 'engineering', priority: 'P1', status: 'backlog' },
     { title: 'Create onboarding flow', owner: 'growth', priority: 'P2', status: 'backlog' },
-    { title: 'Research competitor pricing', owner: 'researcher', priority: 'P3', status: 'backlog' },
-    { title: 'Design email templates', owner: 'marketing', priority: 'P3', status: 'backlog' },
   ];
 
   const createdTasks: any[] = [];
@@ -65,7 +61,7 @@ async function createDemoData() {
     } catch (e) {}
   }
 
-  // Add some traces for the in-progress tasks
+  // Add traces for in-progress and done tasks to show monitoring data
   for (const task of createdTasks.filter(t => t.status === 'in_progress' || t.status === 'done')) {
     try {
       await fetch(`${API_URL}/tasks/${task.id}/traces`, {
@@ -74,7 +70,7 @@ async function createDemoData() {
         body: JSON.stringify({
           agentName: task.owner,
           eventType: 'start',
-          content: `Started working on: ${task.title}`
+          content: `Agent started: ${task.title}`
         })
       });
       await fetch(`${API_URL}/tasks/${task.id}/traces`, {
@@ -83,9 +79,19 @@ async function createDemoData() {
         body: JSON.stringify({
           agentName: task.owner,
           eventType: 'llm_call',
-          content: 'Analyzing task requirements',
-          tokens: { input: 1250, output: 890 },
-          latencyMs: 2340
+          content: 'Analyzing requirements and context',
+          tokens: { input: 1850, output: 1240 },
+          latencyMs: 3200
+        })
+      });
+      await fetch(`${API_URL}/tasks/${task.id}/traces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentName: task.owner,
+          eventType: 'tool_use',
+          content: 'Reading codebase files',
+          latencyMs: 450
         })
       });
       if (task.status === 'done') {
@@ -108,24 +114,25 @@ async function createDemoData() {
 async function recordDemo() {
   console.log('🎬 Starting demo recording...');
 
-  // Clear and create fresh data
   await clearData();
   const tasks = await createDemoData();
-  console.log(`✅ Created ${tasks.length} demo tasks`);
+  console.log(`✅ Created ${tasks.length} demo tasks with traces`);
 
   const browser = await puppeteer.launch({
     headless: false,
     defaultViewport: null,
     args: [
       '--window-size=1280,800',
-      '--window-position=0,0'
+      '--window-position=0,0',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage'
     ]
   });
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 800 });
 
-  // Start recording
   const recorder = new PuppeteerScreenRecorder(page, {
     followNewTab: true,
     fps: 30,
@@ -138,123 +145,158 @@ async function recordDemo() {
 
   try {
     // ========== SCENE 1: Kanban Dashboard ==========
-    console.log('Scene 1: Kanban Dashboard with tasks');
+    console.log('Scene 1: Kanban Dashboard');
     await page.goto(DASHBOARD_URL, { waitUntil: 'networkidle0' });
     await sleep(1500);
 
-    // Title overlay
     await page.evaluate(() => {
       const title = document.createElement('div');
       title.id = 'demo-title';
-      title.innerHTML = `
-        <div style="
-          position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-          background: #2563eb; color: white; padding: 12px 28px; border-radius: 8px;
-          font-family: -apple-system, sans-serif; font-size: 18px; font-weight: 600;
-          z-index: 10000; box-shadow: 0 4px 16px rgba(37,99,235,0.4);
-        ">Kanban Task Board</div>
-      `;
+      title.innerHTML = `<div style="
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background: #2563eb; color: white; padding: 12px 28px; border-radius: 8px;
+        font-family: -apple-system, sans-serif; font-size: 18px; font-weight: 600;
+        z-index: 10000; box-shadow: 0 4px 16px rgba(37,99,235,0.4);
+      ">Kanban Task Board</div>`;
       document.body.appendChild(title);
     });
     await sleep(2500);
     await page.evaluate(() => document.getElementById('demo-title')?.remove());
-    await sleep(500);
 
-    // ========== SCENE 2: Agent picks up task ==========
-    console.log('Scene 2: Agent picks up task');
+    // ========== SCENE 2: Show Gantt with in-progress tasks ==========
+    console.log('Scene 2: Gantt Chart - Project Timeline');
+    await page.evaluate(() => {
+      const title = document.createElement('div');
+      title.id = 'demo-title';
+      title.innerHTML = `<div style="
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px;
+        font-family: -apple-system, sans-serif; font-size: 16px; font-weight: 600;
+        z-index: 10000;
+      ">Project Timeline</div>`;
+      document.body.appendChild(title);
+    });
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('.nav-btn');
+      btns.forEach((btn: any) => { if (btn.textContent?.includes('GANTT')) btn.click(); });
+    });
+    await sleep(3000);
+    await page.evaluate(() => document.getElementById('demo-title')?.remove());
+
+    // ========== SCENE 3: Activity Traces - Live Monitoring ==========
+    console.log('Scene 3: Activity Traces - Live Monitoring');
+    await page.evaluate(() => {
+      const title = document.createElement('div');
+      title.id = 'demo-title';
+      title.innerHTML = `<div style="
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px;
+        font-family: -apple-system, sans-serif; font-size: 16px; font-weight: 600;
+        z-index: 10000;
+      ">Activity Monitoring</div>`;
+      document.body.appendChild(title);
+    });
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('.nav-btn');
+      btns.forEach((btn: any) => { if (btn.textContent?.includes('TRACES')) btn.click(); });
+    });
+    await sleep(2000);
+
+    // Expand first task group to show traces
+    await page.evaluate(() => {
+      const groups = document.querySelectorAll('.trace-group-header');
+      if (groups.length > 0) (groups[0] as HTMLElement).click();
+    });
+    await sleep(2500);
+    await page.evaluate(() => document.getElementById('demo-title')?.remove());
+
+    // ========== SCENE 4: Back to Tasks - Agent picks up task ==========
+    console.log('Scene 4: Agent picks up task');
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('.nav-btn');
+      btns.forEach((btn: any) => { if (btn.textContent?.includes('TASKS')) btn.click(); });
+    });
+    await sleep(1000);
+
     const readyTask = tasks.find((t: any) => t.status === 'ready');
-
     if (readyTask) {
-      // Show command overlay
       await page.evaluate(() => {
         const overlay = document.createElement('div');
         overlay.id = 'cmd-overlay';
-        overlay.innerHTML = `
-          <div style="
-            position: fixed; bottom: 20px; left: 20px;
-            background: #1e293b; border-radius: 8px; padding: 16px 20px;
-            font-family: 'Monaco', 'Menlo', monospace; font-size: 13px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 10000;
-          ">
-            <div style="color: #64748b; margin-bottom: 6px;">$ Agent picking up task...</div>
-            <div style="color: #3b82f6;">POST /api/run-agent {"agent": "marketing"}</div>
-          </div>
-        `;
+        overlay.innerHTML = `<div style="
+          position: fixed; bottom: 20px; left: 20px;
+          background: #1e293b; border-radius: 8px; padding: 16px 20px;
+          font-family: 'Monaco', monospace; font-size: 13px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 10000;
+        ">
+          <div style="color: #64748b; margin-bottom: 6px;">$ Running agent...</div>
+          <div style="color: #3b82f6;">POST /api/run-agent {"agent": "pm"}</div>
+        </div>`;
         document.body.appendChild(overlay);
       });
       await sleep(1500);
 
-      // Move task to in_progress
       await fetch(`${API_URL}/tasks/${readyTask.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'in_progress' })
       });
-
-      // Add trace for this task
       await fetch(`${API_URL}/tasks/${readyTask.id}/traces`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          agentName: 'marketing',
+          agentName: 'pm',
           eventType: 'start',
           content: `Started: ${readyTask.title}`
         })
       });
 
       await page.reload({ waitUntil: 'networkidle0' });
-
       await page.evaluate(() => {
         const overlay = document.getElementById('cmd-overlay');
         if (overlay) {
-          overlay.innerHTML = `
-            <div style="
-              position: fixed; bottom: 20px; left: 20px;
-              background: #1e293b; border-radius: 8px; padding: 16px 20px;
-              font-family: 'Monaco', 'Menlo', monospace; font-size: 13px;
-              box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 10000;
-            ">
-              <div style="color: #22c55e;">✓ Agent started</div>
-              <div style="color: #fbbf24; margin-top: 4px;">[Slack] Channel: #task-marketing-landing</div>
-              <div style="color: #fbbf24;">[Agent] Working on task...</div>
-            </div>
-          `;
+          overlay.innerHTML = `<div style="
+            position: fixed; bottom: 20px; left: 20px;
+            background: #1e293b; border-radius: 8px; padding: 16px 20px;
+            font-family: 'Monaco', monospace; font-size: 13px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 10000;
+          ">
+            <div style="color: #22c55e;">✓ Agent started</div>
+            <div style="color: #fbbf24; margin-top: 4px;">[Slack] #task-pm-docs</div>
+          </div>`;
         }
       });
-      await sleep(2500);
+      await sleep(2000);
       await page.evaluate(() => document.getElementById('cmd-overlay')?.remove());
     }
 
-    // ========== SCENE 3: Slack conversation ==========
-    console.log('Scene 3: Slack real-time conversation');
+    // ========== SCENE 5: Slack conversation ==========
+    console.log('Scene 5: Slack conversation');
     await page.evaluate(() => {
       const slack = document.createElement('div');
       slack.id = 'slack-panel';
-      slack.innerHTML = `
-        <div style="
-          position: fixed; top: 80px; right: 20px; width: 360px;
-          background: #1a1d21; border-radius: 8px;
-          font-family: -apple-system, sans-serif; color: #fff;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4); z-index: 10000; overflow: hidden;
-        ">
-          <div style="background: #350d36; padding: 12px 16px; display: flex; align-items: center; gap: 10px;">
-            <span style="font-weight: 600; font-size: 14px;"># task-marketing-landing</span>
-            <span style="margin-left: auto; background: #22c55e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">LIVE</span>
-          </div>
-          <div id="slack-messages" style="padding: 14px; min-height: 220px;"></div>
+      slack.innerHTML = `<div style="
+        position: fixed; top: 80px; right: 20px; width: 360px;
+        background: #1a1d21; border-radius: 8px;
+        font-family: -apple-system, sans-serif; color: #fff;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4); z-index: 10000; overflow: hidden;
+      ">
+        <div style="background: #350d36; padding: 12px 16px; display: flex; align-items: center; gap: 10px;">
+          <span style="font-weight: 600; font-size: 14px;"># task-pm-docs</span>
+          <span style="margin-left: auto; background: #22c55e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">LIVE</span>
         </div>
-      `;
+        <div id="slack-messages" style="padding: 14px; min-height: 200px;"></div>
+      </div>`;
       document.body.appendChild(slack);
     });
     await sleep(400);
 
     const messages = [
-      { user: 'marketing', isBot: true, text: '🤖 Starting: Create landing page', delay: 700 },
-      { user: 'marketing', isBot: true, text: 'Analyzing brand guidelines...', delay: 900 },
-      { user: 'marketing', isBot: true, text: 'Generating hero section copy', delay: 800 },
-      { user: 'dean', isBot: false, text: 'Add a pricing section please', delay: 1100 },
-      { user: 'marketing', isBot: true, text: '✓ Added pricing with 3 tiers', delay: 900 },
-      { user: 'marketing', isBot: true, text: '✅ Landing page complete!', delay: 700 },
+      { user: 'pm', isBot: true, text: '🤖 Starting: Write API documentation', delay: 700 },
+      { user: 'pm', isBot: true, text: 'Reading existing endpoints...', delay: 900 },
+      { user: 'dean', isBot: false, text: 'Include auth examples please', delay: 1000 },
+      { user: 'pm', isBot: true, text: '✓ Added auth examples', delay: 800 },
+      { user: 'pm', isBot: true, text: '✅ Documentation complete!', delay: 700 },
     ];
 
     for (const msg of messages) {
@@ -264,28 +306,22 @@ async function recordDemo() {
         const msgEl = document.createElement('div');
         msgEl.style.cssText = 'display: flex; margin-bottom: 14px;';
         msgEl.innerHTML = `
-          <div style="
-            width: 34px; height: 34px;
-            background: ${m.isBot ? '#4a154b' : '#2eb67d'};
-            border-radius: 4px;
-            display: flex; align-items: center; justify-content: center;
-            margin-right: 10px; flex-shrink: 0; font-size: 15px;
-          ">${m.isBot ? '🤖' : '👤'}</div>
+          <div style="width: 34px; height: 34px; background: ${m.isBot ? '#4a154b' : '#2eb67d'};
+            border-radius: 4px; display: flex; align-items: center; justify-content: center;
+            margin-right: 10px; flex-shrink: 0; font-size: 15px;">${m.isBot ? '🤖' : '👤'}</div>
           <div>
             <div style="font-weight: 600; color: ${m.isBot ? '#1d9bd1' : '#fff'}; font-size: 13px;">
-              ${m.user} <span style="color: #616061; font-weight: 400; font-size: 11px;">just now</span>
+              ${m.user} <span style="color: #616061; font-weight: 400; font-size: 11px;">now</span>
             </div>
             <div style="color: #d1d2d3; font-size: 13px; margin-top: 3px;">${m.text}</div>
-          </div>
-        `;
+          </div>`;
         container.appendChild(msgEl);
         container.scrollTop = container.scrollHeight;
       }, msg);
       await sleep(msg.delay);
     }
-    await sleep(1200);
+    await sleep(1000);
 
-    // Complete the task
     if (readyTask) {
       await fetch(`${API_URL}/tasks/${readyTask.id}`, {
         method: 'PATCH',
@@ -296,128 +332,67 @@ async function recordDemo() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          agentName: 'marketing',
+          agentName: 'pm',
           eventType: 'complete',
-          content: 'Landing page completed'
+          content: 'API documentation completed'
         })
       });
     }
 
     await page.evaluate(() => document.getElementById('slack-panel')?.remove());
     await page.reload({ waitUntil: 'networkidle0' });
-    await sleep(1200);
+    await sleep(1000);
 
-    // ========== SCENE 4: GANTT Chart ==========
-    console.log('Scene 4: Gantt Chart Timeline');
+    // ========== SCENE 6: Agents Registry ==========
+    console.log('Scene 6: Agent Registry');
     await page.evaluate(() => {
       const title = document.createElement('div');
       title.id = 'demo-title';
-      title.innerHTML = `
-        <div style="
-          position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-          background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px;
-          font-family: -apple-system, sans-serif; font-size: 16px; font-weight: 600;
-          z-index: 10000;
-        ">Gantt Chart - Project Timeline</div>
-      `;
+      title.innerHTML = `<div style="
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px;
+        font-family: -apple-system, sans-serif; font-size: 16px; font-weight: 600;
+        z-index: 10000;
+      ">Agent Registry</div>`;
       document.body.appendChild(title);
     });
-
-    // Click GANTT button
     await page.evaluate(() => {
-      const btns = document.querySelectorAll('button');
-      btns.forEach((btn: any) => { if (btn.textContent?.includes('GANTT')) btn.click(); });
-    });
-    await sleep(3000);
-    await page.evaluate(() => document.getElementById('demo-title')?.remove());
-    await sleep(500);
-
-    // ========== SCENE 5: TRACES View ==========
-    console.log('Scene 5: Activity Traces by Task');
-    await page.evaluate(() => {
-      const title = document.createElement('div');
-      title.id = 'demo-title';
-      title.innerHTML = `
-        <div style="
-          position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-          background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px;
-          font-family: -apple-system, sans-serif; font-size: 16px; font-weight: 600;
-          z-index: 10000;
-        ">Activity Traces - Token Usage & Timing</div>
-      `;
-      document.body.appendChild(title);
-    });
-
-    await page.evaluate(() => {
-      const btns = document.querySelectorAll('button');
-      btns.forEach((btn: any) => { if (btn.textContent?.includes('TRACES')) btn.click(); });
-    });
-    await sleep(2500);
-
-    // Click to expand a task group
-    await page.evaluate(() => {
-      const groups = document.querySelectorAll('.trace-group-header');
-      if (groups.length > 0) (groups[0] as HTMLElement).click();
-    });
-    await sleep(2000);
-    await page.evaluate(() => document.getElementById('demo-title')?.remove());
-    await sleep(500);
-
-    // ========== SCENE 6: AGENTS View ==========
-    console.log('Scene 6: Agent Management');
-    await page.evaluate(() => {
-      const title = document.createElement('div');
-      title.id = 'demo-title';
-      title.innerHTML = `
-        <div style="
-          position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-          background: #2563eb; color: white; padding: 10px 24px; border-radius: 8px;
-          font-family: -apple-system, sans-serif; font-size: 16px; font-weight: 600;
-          z-index: 10000;
-        ">Agent Registry - Edit & Manage</div>
-      `;
-      document.body.appendChild(title);
-    });
-
-    await page.evaluate(() => {
-      const btns = document.querySelectorAll('button');
+      const btns = document.querySelectorAll('.nav-btn');
       btns.forEach((btn: any) => { if (btn.textContent?.includes('AGENTS')) btn.click(); });
     });
-    await sleep(3000);
+    await sleep(2500);
     await page.evaluate(() => document.getElementById('demo-title')?.remove());
 
-    // ========== SCENE 7: Final CTA ==========
+    // ========== SCENE 7: Final CTA - Light Theme ==========
     console.log('Scene 7: GitHub CTA');
     await page.evaluate(() => {
       const cta = document.createElement('div');
-      cta.innerHTML = `
+      cta.innerHTML = `<div style="
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(255,255,255,0.97);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 10000;
+      ">
         <div style="
-          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-          background: rgba(0,0,0,0.92);
-          display: flex; align-items: center; justify-content: center;
-          z-index: 10000;
+          background: white; border: 1px solid #e0e0e0;
+          border-radius: 16px; padding: 48px 72px; text-align: center;
+          box-shadow: 0 8px 40px rgba(0,0,0,0.1);
         ">
-          <div style="
-            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-            border-radius: 16px; padding: 48px 72px; text-align: center;
-            box-shadow: 0 8px 40px rgba(0,0,0,0.5);
-          ">
-            <div style="font-size: 60px; margin-bottom: 16px;">🤖</div>
-            <div style="font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 8px; font-family: -apple-system, sans-serif;">
-              Agentic
-            </div>
-            <div style="font-size: 16px; color: #94a3b8; margin-bottom: 20px; font-family: -apple-system, sans-serif;">
-              Self-improving multi-agent orchestration
-            </div>
-            <div style="font-size: 20px; color: #3b82f6; margin-bottom: 20px; font-family: -apple-system, sans-serif;">
-              github.com/0xtechdean/agentic
-            </div>
-            <div style="font-size: 13px; color: #64748b; font-family: -apple-system, sans-serif;">
-              MIT Licensed • TypeScript • Claude AI Powered
-            </div>
+          <div style="font-size: 60px; margin-bottom: 16px;">🤖</div>
+          <div style="font-size: 32px; font-weight: 700; color: #1a1a1a; margin-bottom: 8px; font-family: -apple-system, sans-serif;">
+            Agentic
+          </div>
+          <div style="font-size: 16px; color: #666; margin-bottom: 20px; font-family: -apple-system, sans-serif;">
+            Self-improving multi-agent orchestration
+          </div>
+          <div style="font-size: 20px; color: #2563eb; margin-bottom: 20px; font-family: -apple-system, sans-serif; font-weight: 600;">
+            github.com/0xtechdean/agentic
+          </div>
+          <div style="font-size: 13px; color: #999; font-family: -apple-system, sans-serif;">
+            MIT Licensed • TypeScript • Claude AI
           </div>
         </div>
-      `;
+      </div>`;
       document.body.appendChild(cta);
     });
     await sleep(3500);
@@ -426,13 +401,11 @@ async function recordDemo() {
     console.error('Error during recording:', error);
   }
 
-  // Stop recording
   await recorder.stop();
   console.log(`✅ Recording saved to: ${videoPath}`);
 
   await browser.close();
 
-  // Convert to high-quality GIF
   console.log('🎨 Converting to GIF...');
   const { execSync } = await import('child_process');
   try {
