@@ -37,9 +37,10 @@ RUN mkdir -p /root/.claude
 ENV NODE_ENV=production
 ENV CI=true
 
-# Claude CLI will use ANTHROPIC_API_KEY from Railway environment variables
-# Set via Railway dashboard or CLI:
-# railway variables set ANTHROPIC_API_KEY=sk-ant-...
+# Claude CLI authentication:
+# 1. Run 'claude setup-token' locally to get a long-lived token
+# 2. Set CLAUDE_AUTH_TOKEN on Railway: railway variables set CLAUDE_AUTH_TOKEN=<token>
+# 3. Also set USE_CLAUDE_CODE=true to enable CLI mode
 
 # Expose port
 EXPOSE 3000
