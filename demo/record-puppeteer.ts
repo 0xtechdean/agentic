@@ -3,19 +3,29 @@ import { PuppeteerScreenRecorder } from 'puppeteer-screen-recorder';
 
 const DASHBOARD_URL = 'http://localhost:3000';
 const API_URL = 'http://localhost:3000/api';
-const SLACK_WORKSPACE = 'https://app.slack.com'; // Update with your workspace
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function createTestTasks() {
-  // Create tasks in different statuses for the demo
+async function createTestData() {
+  // Create project
+  try {
+    await fetch(`${API_URL}/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Demo Project', description: 'Demo project for recording' })
+    });
+  } catch (e) {}
+
+  // Create tasks in different statuses
   const tasks = [
-    { title: 'Design database schema', owner: 'backend', priority: 'P1', status: 'done' },
-    { title: 'Build user auth API', owner: 'backend', priority: 'P1', status: 'ready' },
-    { title: 'Create login form', owner: 'frontend', priority: 'P2', status: 'backlog' },
-    { title: 'Write API docs', owner: 'pm', priority: 'P3', status: 'backlog' },
+    { title: 'Design system architecture', owner: 'engineering', priority: 'P1', status: 'done' },
+    { title: 'Build user authentication API', owner: 'engineering', priority: 'P1', status: 'in_progress' },
+    { title: 'Create marketing landing page', owner: 'marketing', priority: 'P2', status: 'ready' },
+    { title: 'Set up analytics tracking', owner: 'data', priority: 'P2', status: 'ready' },
+    { title: 'Write API documentation', owner: 'pm', priority: 'P3', status: 'backlog' },
+    { title: 'Research competitor features', owner: 'researcher', priority: 'P2', status: 'backlog' },
   ];
 
   for (const task of tasks) {
@@ -25,48 +35,46 @@ async function createTestTasks() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(task)
       });
-    } catch (e) {
-      // Task might already exist
-    }
+    } catch (e) {}
   }
 }
 
 async function recordDemo() {
-  console.log('🎬 Starting demo recording with frontend + Slack...');
+  console.log('🎬 Starting demo recording...');
 
-  // Create test tasks first
-  await createTestTasks();
+  // Create test data first
+  await createTestData();
 
   const browser = await puppeteer.launch({
     headless: false,
     defaultViewport: null,
     args: [
-      '--window-size=1400,900',
+      '--window-size=1280,800',
       '--window-position=0,0'
     ]
   });
 
   const page = await browser.newPage();
-  await page.setViewport({ width: 1400, height: 900 });
+  await page.setViewport({ width: 1280, height: 800 });
 
   // Start recording
   const recorder = new PuppeteerScreenRecorder(page, {
     followNewTab: true,
     fps: 30,
-    videoFrame: { width: 1400, height: 900 },
+    videoFrame: { width: 1280, height: 800 },
   });
 
-  const videoPath = './demo/demo-full.mp4';
+  const videoPath = './demo/demo-new.mp4';
   await recorder.start(videoPath);
   console.log('📹 Recording started...');
 
   try {
-    // Scene 1: Dashboard with tasks in columns
-    console.log('Scene 1: Dashboard overview');
+    // Scene 1: Kanban Dashboard
+    console.log('Scene 1: Kanban Dashboard');
     await page.goto(DASHBOARD_URL, { waitUntil: 'networkidle0' });
-    await sleep(2500);
+    await sleep(2000);
 
-    // Add a title overlay
+    // Add title overlay
     await page.evaluate(() => {
       const title = document.createElement('div');
       title.id = 'demo-title';
@@ -76,7 +84,7 @@ async function recordDemo() {
           top: 20px;
           left: 50%;
           transform: translateX(-50%);
-          background: rgba(0,0,0,0.8);
+          background: #2563eb;
           color: white;
           padding: 12px 24px;
           border-radius: 8px;
@@ -84,188 +92,154 @@ async function recordDemo() {
           font-size: 18px;
           font-weight: 600;
           z-index: 10000;
+          box-shadow: 0 4px 12px rgba(37,99,235,0.3);
         ">
-          🤖 AI Team Orchestrator - Kanban Dashboard
+          Agentic - Multi-Agent Task Board
         </div>
       `;
       document.body.appendChild(title);
     });
-    await sleep(2000);
+    await sleep(2500);
+    await page.evaluate(() => document.getElementById('demo-title')?.remove());
 
-    // Remove title
-    await page.evaluate(() => {
-      document.getElementById('demo-title')?.remove();
-    });
+    // Scene 2: Move task to Ready -> Agent picks it up
+    console.log('Scene 2: Agent picks up task');
 
-    // Scene 2: Highlight a task and show we're about to run an agent
-    console.log('Scene 2: Select task for agent');
-    await page.evaluate(() => {
-      const overlay = document.createElement('div');
-      overlay.id = 'action-overlay';
-      overlay.innerHTML = `
-        <div style="
-          position: fixed;
-          bottom: 20px;
-          left: 20px;
-          background: #1e1e1e;
-          border-radius: 8px;
-          padding: 16px 20px;
-          font-family: 'Monaco', monospace;
-          font-size: 14px;
-          color: #4ade80;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-          z-index: 10000;
-          max-width: 600px;
-        ">
-          <div style="color: #888; margin-bottom: 8px;">$ Running backend agent on task...</div>
-          <div style="color: #60a5fa;">curl -X POST /api/run-agent -d '{"agentName": "backend"}'</div>
-        </div>
-      `;
-      document.body.appendChild(overlay);
-    });
-    await sleep(2000);
-
-    // Scene 3: Make API call and show task moving
-    console.log('Scene 3: Agent starts - task moves to In Progress');
-
-    // Update a task to "in_progress" to simulate agent picking it up
+    // Find a ready task and simulate agent picking it up
     const tasksRes = await fetch(`${API_URL}/projects/default/tasks`);
     const tasks = await tasksRes.json();
     const readyTask = tasks.find((t: any) => t.status === 'ready');
 
     if (readyTask) {
-      await fetch(`${API_URL}/tasks/${readyTask.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'in_progress' })
-      });
-    }
-
-    // Update overlay to show progress
-    await page.evaluate(() => {
-      const overlay = document.getElementById('action-overlay');
-      if (overlay) {
+      // Show action overlay
+      await page.evaluate(() => {
+        const overlay = document.createElement('div');
+        overlay.id = 'action-overlay';
         overlay.innerHTML = `
           <div style="
             position: fixed;
             bottom: 20px;
             left: 20px;
-            background: #1e1e1e;
+            background: #1e293b;
             border-radius: 8px;
             padding: 16px 20px;
-            font-family: 'Monaco', monospace;
-            font-size: 14px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            color: #22c55e;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
             z-index: 10000;
-            max-width: 600px;
           ">
-            <div style="color: #4ade80;">✓ Agent started</div>
-            <div style="color: #fbbf24; margin-top: 4px;">[Slack] Creating channel #task-backend-abc123</div>
-            <div style="color: #fbbf24;">[Agent] Task moved to In Progress</div>
+            <div style="color: #94a3b8; margin-bottom: 8px;">$ Agent picking up task...</div>
+            <div style="color: #3b82f6;">POST /api/run-agent {"agent": "marketing"}</div>
           </div>
         `;
-      }
-    });
+        document.body.appendChild(overlay);
+      });
+      await sleep(1500);
 
-    // Refresh to show task moved
-    await page.reload({ waitUntil: 'networkidle0' });
-    await sleep(2500);
+      // Move task to in_progress
+      await fetch(`${API_URL}/tasks/${readyTask.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'in_progress' })
+      });
 
-    // Scene 4: Show Slack channel simulation (side panel)
-    console.log('Scene 4: Slack channel with conversation');
+      await page.reload({ waitUntil: 'networkidle0' });
+
+      await page.evaluate(() => {
+        const overlay = document.getElementById('action-overlay');
+        if (overlay) {
+          overlay.innerHTML = `
+            <div style="
+              position: fixed;
+              bottom: 20px;
+              left: 20px;
+              background: #1e293b;
+              border-radius: 8px;
+              padding: 16px 20px;
+              font-family: 'Monaco', 'Menlo', monospace;
+              font-size: 13px;
+              box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+              z-index: 10000;
+            ">
+              <div style="color: #22c55e;">✓ Agent started</div>
+              <div style="color: #fbbf24; margin-top: 4px;">[Slack] Channel created: #task-marketing</div>
+              <div style="color: #fbbf24;">[Agent] Working on task...</div>
+            </div>
+          `;
+        }
+      });
+      await sleep(2500);
+    }
+
+    // Scene 3: Show Slack conversation simulation
+    console.log('Scene 3: Slack conversation');
     await page.evaluate(() => {
-      const overlay = document.getElementById('action-overlay');
-      if (overlay) overlay.remove();
+      document.getElementById('action-overlay')?.remove();
 
       const slack = document.createElement('div');
       slack.id = 'slack-panel';
       slack.innerHTML = `
         <div style="
           position: fixed;
-          top: 60px;
+          top: 80px;
           right: 20px;
-          width: 380px;
-          height: 500px;
+          width: 340px;
           background: #1a1d21;
           border-radius: 8px;
           font-family: -apple-system, sans-serif;
           color: #fff;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.3);
           z-index: 10000;
           overflow: hidden;
-          display: flex;
-          flex-direction: column;
         ">
-          <!-- Slack Header -->
-          <div style="background: #350d36; padding: 12px 16px; display: flex; align-items: center; gap: 8px;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>
-            <span style="font-weight: 600;"># task-backend-abc123</span>
+          <div style="background: #350d36; padding: 10px 14px; display: flex; align-items: center; gap: 8px;">
+            <span style="font-weight: 600; font-size: 14px;"># task-marketing</span>
           </div>
-
-          <!-- Messages -->
-          <div id="slack-messages" style="flex: 1; padding: 16px; overflow-y: auto;">
-          </div>
-
-          <!-- Input -->
-          <div style="padding: 12px 16px; border-top: 1px solid #333;">
-            <div id="slack-input" style="background: #222529; border-radius: 4px; padding: 10px 12px; color: #888; font-size: 14px;">
-              Message #task-backend-abc123
-            </div>
-          </div>
+          <div id="slack-messages" style="padding: 12px; min-height: 200px;"></div>
         </div>
       `;
       document.body.appendChild(slack);
     });
     await sleep(500);
 
-    // Animate messages appearing
+    // Animate messages
     const messages = [
-      { user: 'backend', isBot: true, text: '🤖 Starting work on: Build user auth API', delay: 800 },
-      { user: 'backend', isBot: true, text: 'Analyzing requirements...', delay: 1000 },
-      { user: 'backend', isBot: true, text: 'Implementing JWT authentication', delay: 1200 },
-      { user: 'dean', isBot: false, text: 'Can you add rate limiting?', delay: 1500 },
-      { user: 'backend', isBot: true, text: '✅ Added rate limiting: 100 req/min', delay: 1000 },
-      { user: 'backend', isBot: true, text: '✅ Task completed! PR ready for review.', delay: 1200 },
+      { user: 'marketing', isBot: true, text: '🤖 Starting: Create marketing landing page', delay: 800 },
+      { user: 'marketing', isBot: true, text: 'Analyzing brand guidelines...', delay: 1000 },
+      { user: 'dean', isBot: false, text: 'Add a pricing section', delay: 1200 },
+      { user: 'marketing', isBot: true, text: '✅ Added pricing with 3 tiers', delay: 1000 },
+      { user: 'marketing', isBot: true, text: '✅ Task completed!', delay: 800 },
     ];
 
     for (const msg of messages) {
       await page.evaluate((m) => {
         const container = document.getElementById('slack-messages');
         if (!container) return;
-
         const msgEl = document.createElement('div');
-        msgEl.style.cssText = 'display: flex; margin-bottom: 16px; animation: fadeIn 0.3s ease;';
+        msgEl.style.cssText = 'display: flex; margin-bottom: 12px;';
         msgEl.innerHTML = `
           <div style="
-            width: 36px;
-            height: 36px;
+            width: 32px; height: 32px;
             background: ${m.isBot ? '#4a154b' : '#2eb67d'};
             border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 10px;
-            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            margin-right: 8px; flex-shrink: 0; font-size: 14px;
           ">${m.isBot ? '🤖' : '👤'}</div>
           <div>
-            <div style="font-weight: 600; color: ${m.isBot ? '#1d9bd1' : '#fff'}; font-size: 14px;">
-              ${m.user}
-              <span style="color: #616061; font-weight: 400; font-size: 12px;">now</span>
+            <div style="font-weight: 600; color: ${m.isBot ? '#1d9bd1' : '#fff'}; font-size: 13px;">
+              ${m.user} <span style="color: #616061; font-weight: 400; font-size: 11px;">now</span>
             </div>
-            <div style="color: #d1d2d3; font-size: 14px; margin-top: 2px;">${m.text}</div>
+            <div style="color: #d1d2d3; font-size: 13px; margin-top: 2px;">${m.text}</div>
           </div>
         `;
         container.appendChild(msgEl);
-        container.scrollTop = container.scrollHeight;
       }, msg);
       await sleep(msg.delay);
     }
+    await sleep(1000);
 
-    await sleep(1500);
-
-    // Scene 5: Task moves to Done
-    console.log('Scene 5: Task completed - moves to Done');
-
+    // Move task to done
     if (readyTask) {
       await fetch(`${API_URL}/tasks/${readyTask.id}`, {
         method: 'PATCH',
@@ -274,131 +248,157 @@ async function recordDemo() {
       });
     }
 
-    // Add completion badge
-    await page.evaluate(() => {
-      const slack = document.getElementById('slack-panel');
-      if (slack) {
-        const badge = document.createElement('div');
-        badge.style.cssText = `
-          position: absolute;
-          top: 50px;
-          right: 10px;
-          background: #2eb67d;
-          color: white;
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          font-weight: 600;
-        `;
-        badge.textContent = '✓ COMPLETED';
-        slack.appendChild(badge);
-      }
-    });
-
-    // Refresh to show task in Done column
+    await page.evaluate(() => document.getElementById('slack-panel')?.remove());
     await page.reload({ waitUntil: 'networkidle0' });
+    await sleep(1500);
 
-    // Re-add slack panel after refresh
+    // Scene 4: Click on GANTT view
+    console.log('Scene 4: Gantt Chart');
     await page.evaluate(() => {
-      const slack = document.createElement('div');
-      slack.innerHTML = `
+      const title = document.createElement('div');
+      title.id = 'demo-title';
+      title.innerHTML = `
         <div style="
           position: fixed;
-          top: 60px;
-          right: 20px;
-          width: 380px;
-          background: #1a1d21;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #2563eb;
+          color: white;
+          padding: 10px 20px;
           border-radius: 8px;
           font-family: -apple-system, sans-serif;
-          color: #fff;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+          font-size: 16px;
+          font-weight: 600;
           z-index: 10000;
-          overflow: hidden;
         ">
-          <div style="background: #350d36; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-weight: 600;"># task-backend-abc123</span>
-            </div>
-            <span style="background: #2eb67d; padding: 2px 8px; border-radius: 4px; font-size: 12px;">✓ Done</span>
-          </div>
-          <div style="padding: 16px; font-size: 14px; color: #aaa;">
-            Task completed successfully.<br/>
-            Channel archived.
-          </div>
+          Gantt Chart Timeline
         </div>
       `;
-      document.body.appendChild(slack);
+      document.body.appendChild(title);
     });
-    await sleep(2500);
 
-    // Scene 6: Self-improvement
-    console.log('Scene 6: Self-improvement');
+    // Click on GANTT button
     await page.evaluate(() => {
-      // Remove slack panel
-      const panels = document.querySelectorAll('[style*="position: fixed"]');
-      panels.forEach(p => p.remove());
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(btn => {
+        if (btn.textContent?.includes('GANTT')) btn.click();
+      });
+    });
+    await sleep(3000);
+    await page.evaluate(() => document.getElementById('demo-title')?.remove());
 
-      const improve = document.createElement('div');
-      improve.innerHTML = `
+    // Scene 5: Click on TRACES view
+    console.log('Scene 5: Activity Traces');
+    await page.evaluate(() => {
+      const title = document.createElement('div');
+      title.id = 'demo-title';
+      title.innerHTML = `
         <div style="
           position: fixed;
-          bottom: 20px;
-          left: 20px;
-          right: 20px;
-          background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #2563eb;
+          color: white;
+          padding: 10px 20px;
           border-radius: 8px;
-          padding: 20px;
-          font-family: 'Monaco', monospace;
-          box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+          font-family: -apple-system, sans-serif;
+          font-size: 16px;
+          font-weight: 600;
           z-index: 10000;
         ">
-          <div style="color: #60a5fa; font-size: 16px; margin-bottom: 12px;">🧠 Self-Improvement System</div>
-          <div style="color: #fbbf24; margin-bottom: 6px;">[Registry] Pattern detected: 'auth-endpoint' used 3 times</div>
-          <div style="color: #fbbf24; margin-bottom: 6px;">[Registry] 💡 Creating reusable skill: 'jwt-auth-scaffold'</div>
-          <div style="color: #4ade80; margin-top: 10px;">✅ Skill saved! Future auth tasks will be 3x faster.</div>
+          Activity Traces by Task
         </div>
       `;
-      document.body.appendChild(improve);
+      document.body.appendChild(title);
     });
-    await sleep(3500);
+
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(btn => {
+        if (btn.textContent?.includes('TRACES')) btn.click();
+      });
+    });
+    await sleep(3000);
+    await page.evaluate(() => document.getElementById('demo-title')?.remove());
+
+    // Scene 6: Back to Tasks, show agent management
+    console.log('Scene 6: Agent Management');
+    await page.evaluate(() => {
+      // Click logo to go back to tasks
+      const logo = document.querySelector('.logo');
+      if (logo) (logo as HTMLElement).click();
+    });
+    await sleep(1000);
+
+    await page.evaluate(() => {
+      const title = document.createElement('div');
+      title.id = 'demo-title';
+      title.innerHTML = `
+        <div style="
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #2563eb;
+          color: white;
+          padding: 10px 20px;
+          border-radius: 8px;
+          font-family: -apple-system, sans-serif;
+          font-size: 16px;
+          font-weight: 600;
+          z-index: 10000;
+        ">
+          Agent Management - Edit & Delete
+        </div>
+      `;
+      document.body.appendChild(title);
+    });
+
+    // Click AGENTS button
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button');
+      buttons.forEach(btn => {
+        if (btn.textContent?.includes('AGENTS')) btn.click();
+      });
+    });
+    await sleep(2500);
+    await page.evaluate(() => document.getElementById('demo-title')?.remove());
 
     // Scene 7: Final CTA
     console.log('Scene 7: GitHub CTA');
     await page.evaluate(() => {
-      // Clear all overlays
-      const overlays = document.querySelectorAll('[style*="position: fixed"]');
-      overlays.forEach(o => o.remove());
-
       const cta = document.createElement('div');
       cta.innerHTML = `
         <div style="
           position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0,0,0,0.85);
+          top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0,0,0,0.9);
           display: flex;
           align-items: center;
           justify-content: center;
           z-index: 10000;
         ">
           <div style="
-            background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%);
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
             border-radius: 16px;
             padding: 48px 64px;
             text-align: center;
             box-shadow: 0 8px 32px rgba(0,0,0,0.4);
           ">
-            <div style="font-size: 64px; margin-bottom: 20px;">🤖</div>
-            <div style="font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 12px; font-family: -apple-system, sans-serif;">
-              AI Team Orchestrator
+            <div style="font-size: 56px; margin-bottom: 16px;">🤖</div>
+            <div style="font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; font-family: -apple-system, sans-serif;">
+              Agentic
             </div>
-            <div style="font-size: 18px; color: #60a5fa; margin-bottom: 20px; font-family: -apple-system, sans-serif;">
-              github.com/0xtechdean/ai-team-orchestrator
+            <div style="font-size: 16px; color: #94a3b8; margin-bottom: 16px; font-family: -apple-system, sans-serif;">
+              Self-improving multi-agent orchestration
             </div>
-            <div style="font-size: 14px; color: #888; font-family: -apple-system, sans-serif;">
-              MIT Licensed • TypeScript • Self-Improving AI Teams
+            <div style="font-size: 18px; color: #3b82f6; margin-bottom: 16px; font-family: -apple-system, sans-serif;">
+              github.com/0xtechdean/agentic
+            </div>
+            <div style="font-size: 13px; color: #64748b; font-family: -apple-system, sans-serif;">
+              MIT Licensed • TypeScript • Claude AI
             </div>
           </div>
         </div>
@@ -417,20 +417,18 @@ async function recordDemo() {
 
   await browser.close();
 
-  // Convert to GIF with better quality
+  // Convert to GIF
   console.log('🎨 Converting to GIF...');
   const { execSync } = await import('child_process');
   try {
-    // Higher quality GIF with better colors
-    execSync(`ffmpeg -y -i ${videoPath} -vf "fps=15,scale=900:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=single[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" -loop 0 ./demo/demo.gif`, {
+    execSync(`ffmpeg -y -i ${videoPath} -vf "fps=12,scale=800:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=single[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" -loop 0 ./demo/demo.gif`, {
       stdio: 'inherit'
     });
     console.log('✅ GIF created: ./demo/demo.gif');
 
-    // Show file size
     const { statSync } = await import('fs');
     const stats = statSync('./demo/demo.gif');
-    console.log(`📦 GIF size: ${(stats.size / 1024).toFixed(0)}KB`);
+    console.log(`📦 GIF size: ${(stats.size / 1024 / 1024).toFixed(2)}MB`);
   } catch (e) {
     console.log('⚠️ GIF conversion failed, MP4 available at:', videoPath);
   }

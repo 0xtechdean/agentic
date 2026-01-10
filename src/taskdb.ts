@@ -13,6 +13,9 @@ export interface Task {
   status: 'backlog' | 'ready' | 'in_progress' | 'done';
   owner?: string;
   priority?: 'P0' | 'P1' | 'P2';
+  output?: string;
+  startedAt?: string;
+  completedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -21,6 +24,18 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
+  createdAt: string;
+}
+
+export interface Trace {
+  id: string;
+  taskId: string;
+  agentName: string;
+  eventType: 'start' | 'tool_call' | 'llm_call' | 'message' | 'error' | 'complete';
+  content: string;
+  metadata?: Record<string, unknown>;
+  tokens?: number;
+  latencyMs?: number;
   createdAt: string;
 }
 
@@ -90,9 +105,45 @@ class TaskDatabase {
           status VARCHAR(20) DEFAULT 'backlog',
           owner VARCHAR(100),
           priority VARCHAR(10),
+          output TEXT,
+          started_at TIMESTAMP,
+          completed_at TIMESTAMP,
           created_at TIMESTAMP DEFAULT NOW(),
           updated_at TIMESTAMP DEFAULT NOW()
         )
+      `);
+
+      // Add new columns if they don't exist (for existing installations)
+      await this.pg.query(`
+        DO $$ BEGIN
+          ALTER TABLE tasks ADD COLUMN IF NOT EXISTS output TEXT;
+          ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMP;
+          ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END $$;
+      `);
+
+      // Agent activity traces table for monitoring
+      await this.pg.query(`
+        CREATE TABLE IF NOT EXISTS traces (
+          id VARCHAR(50) PRIMARY KEY,
+          task_id VARCHAR(50) REFERENCES tasks(id) ON DELETE CASCADE,
+          agent_name VARCHAR(100) NOT NULL,
+          event_type VARCHAR(20) NOT NULL,
+          content TEXT,
+          metadata JSONB,
+          tokens INTEGER,
+          latency_ms INTEGER,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+
+      await this.pg.query(`
+        CREATE INDEX IF NOT EXISTS idx_traces_task_id ON traces(task_id)
+      `);
+
+      await this.pg.query(`
+        CREATE INDEX IF NOT EXISTS idx_traces_created_at ON traces(created_at DESC)
       `);
 
       await this.pg.query(`
@@ -240,7 +291,7 @@ class TaskDatabase {
   async getTask(id: string): Promise<Task | undefined> {
     if (this.usePostgres && this.pg) {
       const result = await this.pg.query(
-        'SELECT id, title, description, status, owner, priority, created_at, updated_at FROM tasks WHERE id = $1',
+        'SELECT id, title, description, status, owner, priority, output, started_at, completed_at, created_at, updated_at FROM tasks WHERE id = $1',
         [id]
       );
       if (result.rows.length === 0) return undefined;
@@ -252,6 +303,9 @@ class TaskDatabase {
         status: row.status,
         owner: row.owner,
         priority: row.priority,
+        output: row.output,
+        startedAt: row.started_at?.toISOString(),
+        completedAt: row.completed_at?.toISOString(),
         createdAt: row.created_at?.toISOString() || new Date().toISOString(),
         updatedAt: row.updated_at?.toISOString() || new Date().toISOString(),
       };
@@ -266,7 +320,7 @@ class TaskDatabase {
     let tasks: Task[] = [];
 
     if (this.usePostgres && this.pg) {
-      let query = 'SELECT id, title, description, status, owner, priority, created_at, updated_at FROM tasks WHERE project_id = $1';
+      let query = 'SELECT id, title, description, status, owner, priority, output, started_at, completed_at, created_at, updated_at FROM tasks WHERE project_id = $1';
       const params: string[] = [projectId];
 
       if (status) {
@@ -282,6 +336,9 @@ class TaskDatabase {
         status: row.status,
         owner: row.owner,
         priority: row.priority,
+        output: row.output,
+        startedAt: row.started_at?.toISOString(),
+        completedAt: row.completed_at?.toISOString(),
         createdAt: row.created_at?.toISOString() || new Date().toISOString(),
         updatedAt: row.updated_at?.toISOString() || new Date().toISOString(),
       }));
@@ -316,7 +373,7 @@ class TaskDatabase {
     });
   }
 
-  async updateTask(id: string, updates: Partial<Pick<Task, 'title' | 'description' | 'status' | 'owner' | 'priority'>>): Promise<Task | undefined> {
+  async updateTask(id: string, updates: Partial<Pick<Task, 'title' | 'description' | 'status' | 'owner' | 'priority' | 'output' | 'startedAt' | 'completedAt'>>): Promise<Task | undefined> {
     const task = await this.getTask(id);
     if (!task) return undefined;
 
@@ -328,8 +385,8 @@ class TaskDatabase {
 
     if (this.usePostgres && this.pg) {
       await this.pg.query(
-        `UPDATE tasks SET title = $1, description = $2, status = $3, owner = $4, priority = $5, updated_at = $6 WHERE id = $7`,
-        [updated.title, updated.description, updated.status, updated.owner, updated.priority, updated.updatedAt, id]
+        `UPDATE tasks SET title = $1, description = $2, status = $3, owner = $4, priority = $5, output = $6, started_at = $7, completed_at = $8, updated_at = $9 WHERE id = $10`,
+        [updated.title, updated.description, updated.status, updated.owner, updated.priority, updated.output, updated.startedAt, updated.completedAt, updated.updatedAt, id]
       );
     } else if (this.redis) {
       await this.redis.set(this.taskKey(id), JSON.stringify(updated));
@@ -385,6 +442,110 @@ class TaskDatabase {
 
   private generateId(): string {
     return Math.random().toString(36).substring(2, 10);
+  }
+
+  // ============== Trace/Monitoring Methods ==============
+
+  async logTrace(
+    taskId: string,
+    agentName: string,
+    eventType: Trace['eventType'],
+    content: string,
+    metadata?: Record<string, unknown>,
+    tokens?: number,
+    latencyMs?: number
+  ): Promise<Trace> {
+    const id = this.generateId();
+    const trace: Trace = {
+      id,
+      taskId,
+      agentName,
+      eventType,
+      content,
+      metadata,
+      tokens,
+      latencyMs,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (this.usePostgres && this.pg) {
+      await this.pg.query(
+        `INSERT INTO traces (id, task_id, agent_name, event_type, content, metadata, tokens, latency_ms, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [id, taskId, agentName, eventType, content, JSON.stringify(metadata || {}), tokens, latencyMs, trace.createdAt]
+      );
+    }
+
+    return trace;
+  }
+
+  async getTraces(taskId: string, limit = 100): Promise<Trace[]> {
+    if (this.usePostgres && this.pg) {
+      const result = await this.pg.query(
+        `SELECT id, task_id, agent_name, event_type, content, metadata, tokens, latency_ms, created_at
+         FROM traces WHERE task_id = $1 ORDER BY created_at ASC LIMIT $2`,
+        [taskId, limit]
+      );
+      return result.rows.map(row => ({
+        id: row.id,
+        taskId: row.task_id,
+        agentName: row.agent_name,
+        eventType: row.event_type,
+        content: row.content,
+        metadata: row.metadata,
+        tokens: row.tokens,
+        latencyMs: row.latency_ms,
+        createdAt: row.created_at?.toISOString() || new Date().toISOString(),
+      }));
+    }
+    return [];
+  }
+
+  async getRecentTraces(limit = 50): Promise<Trace[]> {
+    if (this.usePostgres && this.pg) {
+      const result = await this.pg.query(
+        `SELECT id, task_id, agent_name, event_type, content, metadata, tokens, latency_ms, created_at
+         FROM traces ORDER BY created_at DESC LIMIT $1`,
+        [limit]
+      );
+      return result.rows.map(row => ({
+        id: row.id,
+        taskId: row.task_id,
+        agentName: row.agent_name,
+        eventType: row.event_type,
+        content: row.content,
+        metadata: row.metadata,
+        tokens: row.tokens,
+        latencyMs: row.latency_ms,
+        createdAt: row.created_at?.toISOString() || new Date().toISOString(),
+      }));
+    }
+    return [];
+  }
+
+  async getTraceStats(taskId: string): Promise<{
+    totalTraces: number;
+    totalTokens: number;
+    totalLatencyMs: number;
+    byEventType: Record<string, number>;
+  }> {
+    const traces = await this.getTraces(taskId);
+    const byEventType: Record<string, number> = {};
+    let totalTokens = 0;
+    let totalLatencyMs = 0;
+
+    for (const trace of traces) {
+      byEventType[trace.eventType] = (byEventType[trace.eventType] || 0) + 1;
+      totalTokens += trace.tokens || 0;
+      totalLatencyMs += trace.latencyMs || 0;
+    }
+
+    return {
+      totalTraces: traces.length,
+      totalTokens,
+      totalLatencyMs,
+      byEventType,
+    };
   }
 }
 

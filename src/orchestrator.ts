@@ -8,15 +8,20 @@ import { memoryService, MemoryService } from './memory';
 import { taskDb, Task } from './taskdb';
 import { agentRegistry } from './agent-registry';
 import { slackService } from './slack';
+import { runClaudeCode } from './claude-runner';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
+// Use Claude Code CLI instead of API if enabled
+const USE_CLAUDE_CODE = process.env.USE_CLAUDE_CODE === 'true';
+
 interface AgentContext {
-  task: string;
+  task?: string;
   files?: string[];
   previousOutput?: string;
   taskId?: string;
   slackChannelId?: string;
+  slackUserId?: string;
 }
 
 export class AgentOrchestrator {
@@ -81,7 +86,12 @@ Create handoffs in docs/handoffs/ when passing work to other agents.`;
     // Create Slack channel for this task
     let slackChannelId = context?.slackChannelId;
     if (!slackChannelId && slackService.isEnabled()) {
-      const channel = await slackService.createTaskChannel(agentName, taskId, task);
+      const channel = await slackService.createTaskChannel(
+        agentName,
+        taskId,
+        task,
+        context?.slackUserId
+      );
       if (channel) {
         slackChannelId = channel.id;
         console.log(`[Orchestrator] Created Slack channel for task: #task-${agentName}-${taskId}`);
@@ -173,18 +183,35 @@ ${triggeredSuggestions}
 
 Output your actions and results in a structured format.`;
 
-    const response = await this.claude.messages.create({
-      model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      messages: [
-        { role: 'user', content: systemPrompt }
-      ],
-    });
+    let result: string;
 
-    const result = response.content
-      .filter(block => block.type === 'text')
-      .map(block => (block as { type: 'text'; text: string }).text)
-      .join('\n');
+    if (USE_CLAUDE_CODE) {
+      // Use Claude Code CLI (uses Pro subscription)
+      console.log('[Orchestrator] Using Claude Code CLI...');
+      const claudeResult = await runClaudeCode(systemPrompt, {
+        model: 'sonnet',
+        timeout: 180000,
+      });
+
+      if (!claudeResult.success) {
+        throw new Error(claudeResult.error || 'Claude Code execution failed');
+      }
+      result = claudeResult.output;
+    } else {
+      // Use Anthropic API directly
+      const response = await this.claude.messages.create({
+        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        max_tokens: 4096,
+        messages: [
+          { role: 'user', content: systemPrompt }
+        ],
+      });
+
+      result = response.content
+        .filter(block => block.type === 'text')
+        .map(block => (block as { type: 'text'; text: string }).text)
+        .join('\n');
+    }
 
     const executionTime = Date.now() - startTime;
     const learnings = this.extractLearnings(result);
@@ -387,13 +414,7 @@ ${learnings.length > 0 ? `*Learnings:*\n${learnings.map(l => `• ${l}`).join('\
       ? recentMemories.map(m => `- ${m.memory}`).join('\n')
       : 'No recent memories';
 
-    const response = await this.claude.messages.create({
-      model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
-      max_tokens: 2048,
-      messages: [
-        {
-          role: 'user',
-          content: `You are the Product Manager for the AI team. A task just completed and you need to plan what happens next.
+    const planPrompt = `You are the Product Manager for the AI team. A task just completed and you need to plan what happens next.
 
 ## Completed Task
 **Task**: ${completedTask}
@@ -425,15 +446,28 @@ Return a JSON object with:
   "nextTask": "task description"
 }
 
-Only return the JSON, no other text.`
-        }
-      ],
-    });
+Only return the JSON, no other text.`;
 
-    const resultText = response.content
-      .filter(block => block.type === 'text')
-      .map(block => (block as { type: 'text'; text: string }).text)
-      .join('');
+    let resultText: string;
+
+    if (USE_CLAUDE_CODE) {
+      const claudeResult = await runClaudeCode(planPrompt, { model: 'sonnet', timeout: 60000 });
+      if (!claudeResult.success) {
+        throw new Error(claudeResult.error || 'Planning failed');
+      }
+      resultText = claudeResult.output;
+    } else {
+      const response = await this.claude.messages.create({
+        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        messages: [{ role: 'user', content: planPrompt }],
+      });
+
+      resultText = response.content
+        .filter(block => block.type === 'text')
+        .map(block => (block as { type: 'text'; text: string }).text)
+        .join('');
+    }
 
     try {
       const plan = JSON.parse(resultText);
@@ -473,7 +507,7 @@ Only return the JSON, no other text.`
     }
   }
 
-  async runSprintCheck(): Promise<string> {
+  async runSprintCheck(slackUserId?: string): Promise<string> {
     console.log('[Orchestrator] Running sprint check...');
 
     const tasks = await taskDb.listTasks('default', 'ready');
@@ -485,14 +519,24 @@ Only return the JSON, no other text.`
     if (nextTask.owner) {
       console.log(`[Orchestrator] Starting task: ${nextTask.title} with ${nextTask.owner}`);
 
-      await taskDb.updateTask(nextTask.id, { status: 'in_progress' });
+      // Mark as in_progress with start time
+      await taskDb.updateTask(nextTask.id, {
+        status: 'in_progress',
+        startedAt: new Date().toISOString()
+      });
 
       const result = await this.runAgent(
         nextTask.owner,
-        nextTask.title + (nextTask.description ? `: ${nextTask.description}` : '')
+        nextTask.title + (nextTask.description ? `: ${nextTask.description}` : ''),
+        { slackUserId, taskId: nextTask.id }
       );
 
-      await taskDb.updateTask(nextTask.id, { status: 'done' });
+      // Mark as done with output and completion time
+      await taskDb.updateTask(nextTask.id, {
+        status: 'done',
+        output: result,
+        completedAt: new Date().toISOString()
+      });
 
       return `Completed: ${nextTask.title}`;
     }
@@ -500,8 +544,8 @@ Only return the JSON, no other text.`
     return 'Next task has no owner assigned';
   }
 
-  async runDailyStandup(): Promise<string> {
+  async runDailyStandup(slackUserId?: string): Promise<string> {
     console.log('[Orchestrator] Running daily standup...');
-    return this.runAgent('pm', 'Conduct daily standup: review progress, identify blockers, plan today\'s priorities');
+    return this.runAgent('pm', 'Conduct daily standup: review progress, identify blockers, plan today\'s priorities', { slackUserId });
   }
 }
