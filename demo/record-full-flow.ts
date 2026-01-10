@@ -43,13 +43,22 @@ async function postToSlack(channelId: string, text: string) {
 }
 
 async function setupTasks() {
-  // Clear and create fresh tasks
+  // Delete all existing tasks first
+  try {
+    const existingRes = await fetch(`${API_URL}/projects/default/tasks`);
+    const existingTasks = await existingRes.json();
+    for (const task of existingTasks) {
+      await fetch(`${API_URL}/tasks/${task.id}`, { method: 'DELETE' });
+    }
+  } catch (e) {}
+
+  // Create fresh demo tasks
   const tasks = [
-    { title: 'Design database schema', owner: 'backend', priority: 'P1', status: 'done' },
-    { title: 'Set up CI/CD pipeline', owner: 'backend', priority: 'P2', status: 'done' },
+    { title: 'Design database schema', owner: 'backend', priority: 'P1', status: 'backlog' },
+    { title: 'Set up CI/CD pipeline', owner: 'devops', priority: 'P2', status: 'backlog' },
     { title: 'Build user auth API', owner: 'backend', priority: 'P1', status: 'backlog' },
-    { title: 'Create login form', owner: 'frontend', priority: 'P2', status: 'backlog' },
-    { title: 'Write API docs', owner: 'pm', priority: 'P3', status: 'backlog' },
+    { title: 'Create login form', owner: 'frontend', priority: 'P2', status: 'done' },
+    { title: 'Write API docs', owner: 'pm', priority: 'P3', status: 'done' },
   ];
 
   for (const task of tasks) {
