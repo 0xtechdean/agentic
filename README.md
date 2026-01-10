@@ -11,7 +11,7 @@ A self-improving multi-agent system that coordinates AI agents to work on tasks 
 
 *Demo: Task moves to Ready → Agent picks it up → Creates Slack channel → Real-time conversation → Task completed*
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/ZjP7MZ?referralCode=eGJsrN)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/ZjP7MZ?referralCode=eGJsrN)
 
 ## Features
 
