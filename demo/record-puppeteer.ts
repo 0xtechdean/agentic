@@ -1,8 +1,8 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 import { PuppeteerScreenRecorder } from 'puppeteer-screen-recorder';
 
-const DASHBOARD_URL = 'http://localhost:3000';
-const API_URL = 'http://localhost:3000/api';
+const DASHBOARD_URL = 'https://ai-team-production.up.railway.app';
+const API_URL = 'https://ai-team-production.up.railway.app/api';
 
 async function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
