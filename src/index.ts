@@ -26,6 +26,40 @@ const orchestrator = new AgentOrchestrator({
   },
 });
 
+// Claude CLI setup endpoint - returns OAuth URL for authentication
+app.get('/api/claude-setup', async (req, res) => {
+  const { spawn } = await import('child_process');
+
+  // Run claude login and capture the OAuth URL
+  const child = spawn('claude', ['login'], {
+    env: { ...process.env, CI: 'true', TERM: 'dumb' },
+  });
+
+  let output = '';
+  child.stdout?.on('data', (data) => { output += data.toString(); });
+  child.stderr?.on('data', (data) => { output += data.toString(); });
+
+  // Give it a few seconds to output the URL
+  setTimeout(() => {
+    child.kill();
+
+    // Try to extract URL from output
+    const urlMatch = output.match(/https:\/\/[^\s]+/);
+
+    res.json({
+      message: 'Run "claude setup-token" locally and update CLAUDE_CODE_OAUTH_TOKEN in Railway',
+      output: output.substring(0, 500),
+      authUrl: urlMatch ? urlMatch[0] : null,
+      instructions: [
+        '1. Run locally: claude setup-token',
+        '2. Copy the token it generates',
+        '3. Update Railway env var: CLAUDE_CODE_OAUTH_TOKEN',
+        '4. Redeploy or restart the service'
+      ]
+    });
+  }, 3000);
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
