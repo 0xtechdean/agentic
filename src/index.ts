@@ -1462,6 +1462,9 @@ app.patch('/api/tasks/:taskId', async (req, res) => {
     const { taskId } = req.params;
     const { title, description, status, owner, priority, output, startedAt, completedAt } = req.body;
 
+    // Get current task to check if status is changing to ready
+    const currentTask = await taskDb.getTask(taskId);
+
     // Only include defined values to avoid overwriting existing fields
     const updates: Record<string, string | undefined> = {};
     if (title !== undefined) updates.title = title;
@@ -1477,6 +1480,40 @@ app.patch('/api/tasks/:taskId', async (req, res) => {
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
+
+    // If task was moved to "ready" and has an owner, trigger agent execution
+    if (status === 'ready' && currentTask?.status !== 'ready' && task.owner) {
+      console.log(`[API] Task ${taskId} moved to ready - triggering ${task.owner} agent`);
+
+      // Update status to in_progress immediately
+      await taskDb.updateTask(taskId, {
+        status: 'in_progress',
+        startedAt: new Date().toISOString()
+      });
+
+      // Run agent asynchronously (don't wait for completion)
+      orchestrator.runAgent(
+        task.owner,
+        `${task.title}${task.description ? `: ${task.description}` : ''}`,
+        { taskId }
+      ).then(async (result) => {
+        // Mark task as done when agent completes
+        await taskDb.updateTask(taskId, {
+          status: 'done',
+          output: result.substring(0, 10000),
+          completedAt: new Date().toISOString()
+        });
+        console.log(`[API] Task ${taskId} completed by ${task.owner}`);
+      }).catch(async (err) => {
+        // Mark task as failed
+        await taskDb.updateTask(taskId, {
+          status: 'backlog',
+          output: `Error: ${err.message}`
+        });
+        console.error(`[API] Task ${taskId} failed:`, err.message);
+      });
+    }
+
     res.json(task);
   } catch (error) {
     res.status(500).json({ error: 'Failed to update task' });
