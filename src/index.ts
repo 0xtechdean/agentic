@@ -88,7 +88,7 @@ app.get('/api/claude-setup/screenshot-auth', async (req, res) => {
 
     // Launch Puppeteer with stealth plugin
     const browser = await puppeteerExtra.default.launch({
-      headless: 'new',
+      headless: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
