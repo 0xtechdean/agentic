@@ -294,6 +294,22 @@
       flex: 1;
       padding: 0.5rem;
       overflow-y: auto;
+      min-height: 100px;
+      transition: background 0.2s ease;
+    }
+
+    .column-body.drag-over {
+      background: rgba(59, 130, 246, 0.1);
+      border: 2px dashed var(--accent-blue);
+      border-radius: 4px;
+    }
+
+    .task-card[draggable="true"] {
+      cursor: grab;
+    }
+
+    .task-card[draggable="true"]:active {
+      cursor: grabbing;
     }
 
     .task-card {
@@ -1684,12 +1700,17 @@
         document.getElementById(`count-${status}`).textContent = statusTasks.length;
 
         if (statusTasks.length === 0) {
-          container.innerHTML = `<div class="empty-state">-</div>`;
+          container.innerHTML = `<div class="empty-state drop-zone" data-status="${status}">Drop task here</div>`;
           return;
         }
 
         container.innerHTML = statusTasks.map(task => `
-          <div class="task-card" onclick="showView('task-detail', '${task.id}')">
+          <div class="task-card"
+               draggable="true"
+               data-task-id="${task.id}"
+               onclick="showView('task-detail', '${task.id}')"
+               ondragstart="handleDragStart(event, '${task.id}')"
+               ondragend="handleDragEnd(event)">
             ${task.priority ? `<span class="task-priority priority-${task.priority}">${task.priority}</span>` : ''}
             <div class="task-title">${escapeHtml(task.title)}</div>
             <div class="task-meta">
@@ -1698,6 +1719,52 @@
             </div>
           </div>
         `).join('');
+      });
+
+      // Setup drop zones
+      setupDropZones();
+    }
+
+    // Drag and Drop handlers
+    let draggedTaskId = null;
+
+    function handleDragStart(event, taskId) {
+      draggedTaskId = taskId;
+      event.target.style.opacity = '0.5';
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', taskId);
+    }
+
+    function handleDragEnd(event) {
+      event.target.style.opacity = '1';
+      document.querySelectorAll('.column-body').forEach(col => {
+        col.classList.remove('drag-over');
+      });
+    }
+
+    function setupDropZones() {
+      document.querySelectorAll('.column-body').forEach(column => {
+        column.ondragover = (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          column.classList.add('drag-over');
+        };
+
+        column.ondragleave = () => {
+          column.classList.remove('drag-over');
+        };
+
+        column.ondrop = async (e) => {
+          e.preventDefault();
+          column.classList.remove('drag-over');
+
+          const taskId = e.dataTransfer.getData('text/plain') || draggedTaskId;
+          const newStatus = column.id.replace('tasks-', '');
+
+          if (taskId && newStatus) {
+            await changeTaskStatus(taskId, newStatus);
+          }
+        };
       });
     }
 
