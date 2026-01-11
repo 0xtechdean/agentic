@@ -62,11 +62,6 @@ export async function runClaudeCode(
       '--dangerously-skip-permissions',
     ];
 
-    // Explicitly pass API key if available (preferred over OAuth which is IP-bound)
-    if (process.env.ANTHROPIC_API_KEY) {
-      claudeArgs.push('--api-key', process.env.ANTHROPIC_API_KEY);
-    }
-
     if (systemPrompt) {
       claudeArgs.push('--system-prompt', systemPrompt);
     }
@@ -81,11 +76,8 @@ export async function runClaudeCode(
     // Note: prompt is added in bash command construction below, not here
 
     const hasToken = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
     console.log(`[ClaudeRunner] Running with model: ${model}`);
     console.log(`[ClaudeRunner] OAuth token present: ${hasToken}`);
-    console.log(`[ClaudeRunner] API key present: ${hasApiKey}`);
-    console.log(`[ClaudeRunner] Using explicit --api-key flag: ${hasApiKey}`);
     console.log(`[ClaudeRunner] Prompt length: ${prompt.length}, using file: ${!!promptFile}`);
     console.log(`[ClaudeRunner] Prompt preview: ${prompt.substring(0, 100)}...`);
 
@@ -105,10 +97,8 @@ export async function runClaudeCode(
 
     console.log(`[ClaudeRunner] Command: ${bashCmd.substring(0, 150)}...`);
 
-    // Prefer API key over OAuth token (OAuth is IP-bound and won't work on servers)
-    // Only pass OAuth token if API key is not available
-    const useApiKey = !!process.env.ANTHROPIC_API_KEY;
-    console.log(`[ClaudeRunner] Using auth method: ${useApiKey ? 'API Key' : 'OAuth Token'}`);
+    // Use OAuth token for CLI mode (Pro subscription)
+    console.log(`[ClaudeRunner] Using OAuth token for CLI mode`);
 
     const child = spawn('unbuffer', ['bash', '-c', bashCmd], {
       cwd: workingDir,
@@ -116,9 +106,8 @@ export async function runClaudeCode(
         ...process.env,
         CI: 'true',
         TERM: 'xterm-256color',
-        // Only pass one auth method to avoid conflicts
-        ANTHROPIC_API_KEY: useApiKey ? process.env.ANTHROPIC_API_KEY : '',
-        CLAUDE_CODE_OAUTH_TOKEN: useApiKey ? '' : (process.env.CLAUDE_CODE_OAUTH_TOKEN || ''),
+        // Use OAuth token for Pro subscription
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

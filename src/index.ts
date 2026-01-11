@@ -349,7 +349,7 @@ app.get('/api/claude-setup/debug', async (req, res) => {
   const { join } = await import('path');
 
   const claudeDir = join(homedir(), '.claude');
-  const result: Record<string, unknown> = {
+  const result = {
     homeDir: homedir(),
     claudeDir,
     claudeDirExists: existsSync(claudeDir),
@@ -358,6 +358,7 @@ app.get('/api/claude-setup/debug', async (req, res) => {
     envTokenPreview: process.env.CLAUDE_CODE_OAUTH_TOKEN
       ? process.env.CLAUDE_CODE_OAUTH_TOKEN.substring(0, 30) + '...'
       : null,
+    error: null as string | null,
   };
 
   if (existsSync(claudeDir)) {
