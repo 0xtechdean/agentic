@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     build-essential \
     python3 \
+    screen \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Puppeteer to use system Chromium

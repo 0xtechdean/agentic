@@ -1039,6 +1039,128 @@ app.post('/api/claude-setup/complete-with-code', express.json(), async (req, res
   });
 });
 
+// Use expect for proper interactive CLI handling
+app.post('/api/claude-setup/expect-token', express.json(), async (req, res) => {
+  const { code } = req.body;
+
+  if (!code) {
+    return res.status(400).json({ error: 'Code is required (format: code#state)' });
+  }
+
+  const { spawn } = await import('child_process');
+  const { writeFileSync, unlinkSync, readFileSync, existsSync } = await import('fs');
+  const { homedir } = await import('os');
+  const { join } = await import('path');
+
+  // Create expect script that properly handles the interactive CLI
+  const expectScript = `#!/usr/bin/expect -f
+set timeout 120
+log_user 1
+
+# Start claude setup-token
+spawn claude setup-token
+
+# Wait for the prompt and send the code
+expect {
+    "Paste code here" {
+        sleep 1
+        send "${code}\\r"
+        exp_continue
+    }
+    "paste code" {
+        sleep 1
+        send "${code}\\r"
+        exp_continue
+    }
+    "Token saved" {
+        puts "SUCCESS: Token saved"
+    }
+    "successfully" {
+        puts "SUCCESS: Auth complete"
+    }
+    "error" {
+        puts "ERROR: Auth failed"
+    }
+    timeout {
+        puts "TIMEOUT: No response"
+    }
+    eof {
+        puts "EOF: Process ended"
+    }
+}
+
+# Wait a bit for file to be written
+sleep 2
+`;
+
+  const expectPath = '/tmp/claude-expect-token.exp';
+  writeFileSync(expectPath, expectScript);
+
+  // Make it executable
+  const { execSync } = await import('child_process');
+  execSync(\`chmod +x \${expectPath}\`);
+
+  console.log('[Expect] Running expect script with code:', code.substring(0, 30) + '...');
+
+  try {
+    const result = await new Promise<{success: boolean, output: string}>((resolve) => {
+      let output = '';
+      const proc = spawn('expect', ['-f', expectPath], {
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+          HOME: homedir(),
+        },
+      });
+
+      proc.stdout?.on('data', (data) => {
+        const chunk = data.toString();
+        output += chunk;
+        console.log('[Expect]', chunk.substring(0, 300));
+      });
+      proc.stderr?.on('data', (data) => {
+        output += data.toString();
+      });
+
+      proc.on('close', (exitCode) => {
+        resolve({
+          success: output.includes('SUCCESS') || exitCode === 0,
+          output,
+        });
+      });
+
+      setTimeout(() => {
+        proc.kill();
+        resolve({ success: false, output: output + '\\nTIMEOUT' });
+      }, 180000);  // 3 minute timeout
+    });
+
+    // Clean up
+    try { unlinkSync(expectPath); } catch {}
+
+    // Check if token file was created
+    const tokenPath = join(homedir(), '.claude', '.oauth_token');
+    let token: string | null = null;
+    if (existsSync(tokenPath)) {
+      token = readFileSync(tokenPath, 'utf-8').trim();
+      if (token.startsWith('sk-ant-')) {
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+        console.log('[Expect] Token loaded into environment!');
+      }
+    }
+
+    res.json({
+      success: result.success || !!token,
+      token: token ? token.substring(0, 30) + '...' : null,
+      tokenLoaded: !!token,
+      output: result.output.substring(0, 2000),
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to run expect script', details: String(error) });
+  }
+});
+
 // OAuth callback forwarder - forwards the callback to Claude CLI's internal server
 app.get('/api/claude-setup/callback', async (req, res) => {
   const queryString = new URL(req.url, `http://${req.headers.host}`).search;
