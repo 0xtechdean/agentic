@@ -471,7 +471,14 @@ Only return the JSON, no other text.`;
     }
 
     try {
-      const plan = JSON.parse(resultText);
+      // Try to extract JSON from the response (LLM might include prose around it)
+      let jsonText = resultText;
+      const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        jsonText = jsonMatch[0];
+      }
+
+      const plan = JSON.parse(jsonText);
       console.log('[Orchestrator] PM analysis:', plan.analysis);
 
       for (const taskId of plan.readyTasks || []) {
@@ -503,7 +510,8 @@ Only return the JSON, no other text.`;
 
       return createdTasks;
     } catch (err) {
-      console.error('[Orchestrator] Failed to parse PM response:', err);
+      // This is non-critical - just means PM couldn't plan follow-up tasks
+      console.log('[Orchestrator] PM planning skipped (response not JSON):', resultText.substring(0, 100) + '...');
       return [];
     }
   }
