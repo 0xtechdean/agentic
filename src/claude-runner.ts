@@ -60,6 +60,7 @@ export async function runClaudeCode(
       '-p',
       '--model', model,
       '--dangerously-skip-permissions',
+      '--debug',  // Add debug output to see what's failing
     ];
 
     if (systemPrompt) {
@@ -145,11 +146,12 @@ export async function runClaudeCode(
         });
       } else {
         console.error(`[ClaudeRunner] Failed with code ${code}`);
-        console.error(`[ClaudeRunner] stderr: ${stderr}`);
+        console.error(`[ClaudeRunner] stdout: ${stdout.substring(0, 500)}`);
+        console.error(`[ClaudeRunner] stderr: ${stderr.substring(0, 500)}`);
         resolve({
           success: false,
           output,
-          error: stderr || `Process exited with code ${code}`,
+          error: stderr || stdout || `Process exited with code ${code}`,
         });
       }
     });
