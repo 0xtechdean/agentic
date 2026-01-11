@@ -201,20 +201,38 @@ app.get('/api/claude-setup/callback', async (req, res) => {
   }
 });
 
-// Manual token input - if you got a token from running setup-token locally
-app.post('/api/claude-setup/set-token', express.json(), (req, res) => {
+// Manual token input - writes to Claude config and env
+app.post('/api/claude-setup/set-token', express.json(), async (req, res) => {
   const { token } = req.body;
 
   if (!token || !token.startsWith('sk-ant-')) {
     return res.status(400).json({ error: 'Invalid token format. Must start with sk-ant-' });
   }
 
-  // Store token in memory (will be lost on restart - update Railway env var for persistence)
+  const { writeFileSync, mkdirSync, existsSync } = await import('fs');
+  const { homedir } = await import('os');
+  const { join } = await import('path');
+
+  // Store token in environment
   process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+
+  // Also write to Claude's config directory
+  const claudeDir = join(homedir(), '.claude');
+  if (!existsSync(claudeDir)) {
+    mkdirSync(claudeDir, { recursive: true });
+  }
+
+  // Write token to .oauth_token file (Claude CLI format)
+  try {
+    writeFileSync(join(claudeDir, '.oauth_token'), token);
+    console.log('[Setup] Token written to ~/.claude/.oauth_token');
+  } catch (e) {
+    console.error('[Setup] Failed to write token file:', e);
+  }
 
   res.json({
     status: 'Token set successfully',
-    note: 'This is temporary. Update CLAUDE_CODE_OAUTH_TOKEN in Railway for persistence.',
+    note: 'Token saved to env and ~/.claude/.oauth_token. Test with /api/run-agent',
     tokenPreview: token.substring(0, 20) + '...',
   });
 });
