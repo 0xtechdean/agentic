@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y \
 # Install Claude CLI globally
 RUN npm install -g @anthropic-ai/claude-code
 
+# Create non-root user (Claude CLI doesn't allow --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash appuser
+
 # Create app directory
 WORKDIR /app
 
@@ -37,12 +40,19 @@ RUN npm prune --production
 # Copy agent definitions
 COPY .claude ./.claude
 
-# Create a directory for Claude CLI config
-RUN mkdir -p /root/.claude
+# Create Claude CLI config directory for appuser
+RUN mkdir -p /home/appuser/.claude && chown -R appuser:appuser /home/appuser/.claude
+
+# Change ownership of app directory to appuser
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
 
 # Set environment variables
 ENV NODE_ENV=production
 ENV CI=true
+ENV HOME=/home/appuser
 
 # Claude CLI authentication:
 # 1. Run 'claude setup-token' locally to get a long-lived token

@@ -60,7 +60,6 @@ export async function runClaudeCode(
       '-p',
       '--model', model,
       '--dangerously-skip-permissions',
-      '--debug',  // Add debug output to see what's failing
     ];
 
     if (systemPrompt) {
