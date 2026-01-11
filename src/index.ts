@@ -213,14 +213,15 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
     setupToken = '';
     setupAuthUrl = null;
 
-    // Start Claude setup-token process with script for proper PTY handling
-    // Linux script syntax: script -q -c "command" /dev/null
-    setupProcess = spawn('script', ['-q', '-c', 'claude setup-token', '/dev/null'], {
+    // Start Claude setup-token process with unbuffer for PTY handling
+    // unbuffer -p provides a pseudo-TTY that should handle stdin
+    setupProcess = spawn('unbuffer', ['-p', 'claude', 'setup-token'], {
       env: {
         ...process.env,
         CI: 'true',
-        TERM: 'xterm-256color',
+        TERM: 'dumb',  // Use dumb terminal to avoid escape sequences
         DISPLAY: '',
+        COLUMNS: '200',  // Wide terminal to avoid line wrapping
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -494,18 +495,20 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
 
           // Feed the auth code to the CLI
           if (setupProcess && setupProcess.stdin) {
-            console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
-            // Use \r\n for proper line ending and flush
-            const written = setupProcess.stdin.write(authCode + '\r\n');
-            console.log('[BrowserAuth] Write returned:', written);
-
-            // Ensure flush
-            if (!written) {
-              await new Promise(resolve => setupProcess!.stdin!.once('drain', resolve));
+            // Wait for the CLI to be ready for input (look for "Paste code" in output)
+            let waitAttempts = 0;
+            while (!setupOutput.includes('Paste code') && waitAttempts < 20) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              waitAttempts++;
             }
+            console.log('[BrowserAuth] CLI ready after', waitAttempts, 'attempts');
+            console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
+
+            // Send code with just newline
+            setupProcess.stdin.write(authCode + '\n');
 
             // Wait for CLI to process
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            await new Promise(resolve => setTimeout(resolve, 20000));
 
             // Check for token
             const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
@@ -671,18 +674,20 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
 
           // Feed the auth code to the CLI
           if (setupProcess && setupProcess.stdin) {
-            console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
-            // Use \r\n for proper line ending and flush
-            const written = setupProcess.stdin.write(authCode + '\r\n');
-            console.log('[BrowserAuth] Write returned:', written);
-
-            // Ensure flush
-            if (!written) {
-              await new Promise(resolve => setupProcess!.stdin!.once('drain', resolve));
+            // Wait for the CLI to be ready for input (look for "Paste code" in output)
+            let waitAttempts = 0;
+            while (!setupOutput.includes('Paste code') && waitAttempts < 20) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              waitAttempts++;
             }
+            console.log('[BrowserAuth] CLI ready after', waitAttempts, 'attempts');
+            console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
+
+            // Send code with just newline
+            setupProcess.stdin.write(authCode + '\n');
 
             // Wait for CLI to process
-            await new Promise(resolve => setTimeout(resolve, 15000));
+            await new Promise(resolve => setTimeout(resolve, 20000));
 
             // Check for token
             const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
@@ -779,15 +784,15 @@ app.get('/api/claude-setup/start', async (req, res) => {
     unlinkSync('/tmp/claude-auth-url.txt');
   } catch {}
 
-  // Run claude setup-token with script command for proper PTY handling
-  // Linux script syntax: script -q -c "command" /dev/null
-  setupProcess = spawn('script', ['-q', '-c', 'claude setup-token', '/dev/null'], {
+  // Run claude setup-token with unbuffer for PTY handling
+  setupProcess = spawn('unbuffer', ['-p', 'claude', 'setup-token'], {
     env: {
       ...process.env,
       CI: 'true',
-      TERM: 'xterm-256color',
+      TERM: 'dumb',  // Use dumb terminal to avoid escape sequences
       BROWSER: browserScript,
       DISPLAY: '',  // Disable X11
+      COLUMNS: '200',  // Wide terminal to avoid line wrapping
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
