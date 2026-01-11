@@ -32,6 +32,7 @@ export async function runClaudeCode(
     const args = [
       '-p', // Print mode (non-interactive)
       '--model', model,
+      '--dangerously-skip-permissions', // Skip all permission prompts
     ];
 
     if (systemPrompt) {
@@ -41,7 +42,10 @@ export async function runClaudeCode(
     // Add the prompt
     args.push(prompt);
 
+    const hasToken = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
     console.log(`[ClaudeRunner] Running with model: ${model}`);
+    console.log(`[ClaudeRunner] OAuth token present: ${hasToken}`);
+    console.log(`[ClaudeRunner] Token preview: ${hasToken ? process.env.CLAUDE_CODE_OAUTH_TOKEN?.substring(0, 20) + '...' : 'none'}`);
     console.log(`[ClaudeRunner] Prompt: ${prompt.substring(0, 100)}...`);
 
     const child = spawn('claude', args, {
