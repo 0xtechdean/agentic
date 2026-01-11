@@ -1592,6 +1592,7 @@ app.get('/api/slack/info', async (req, res) => {
 // ============== File Viewer Routes ==============
 
 // View a file's contents (for sharing file links)
+// Checks database first, then falls back to filesystem
 app.get('/api/files/view', async (req, res) => {
   try {
     const { path: filePath } = req.query;
@@ -1599,37 +1600,54 @@ app.get('/api/files/view', async (req, res) => {
       return res.status(400).json({ error: 'path query parameter is required' });
     }
 
-    const { readFileSync, existsSync } = await import('fs');
-    const { resolve, relative, basename, extname } = await import('path');
+    const { basename } = await import('path');
+    let content: string | null = null;
+    let source = 'database';
+    let agentName: string | undefined;
 
-    // Security: Only allow files within /app directory
-    const absolutePath = resolve(filePath);
-    if (!absolutePath.startsWith('/app/')) {
-      return res.status(403).json({ error: 'Access denied - only /app files allowed' });
+    // Check database first
+    const dbFile = await taskDb.getFile(filePath);
+    if (dbFile) {
+      content = dbFile.content;
+      agentName = dbFile.agentName;
+    } else {
+      // Fall back to filesystem
+      const { readFileSync, existsSync } = await import('fs');
+      const { resolve } = await import('path');
+
+      const absolutePath = resolve(filePath);
+      if (!absolutePath.startsWith('/app/')) {
+        return res.status(403).json({ error: 'Access denied - only /app files allowed' });
+      }
+
+      if (existsSync(absolutePath)) {
+        content = readFileSync(absolutePath, 'utf-8');
+        source = 'filesystem';
+      }
     }
 
-    if (!existsSync(absolutePath)) {
-      return res.status(404).json({ error: 'File not found', path: absolutePath });
+    if (!content) {
+      return res.status(404).json({ error: 'File not found', path: filePath });
     }
-
-    const content = readFileSync(absolutePath, 'utf-8');
-    const ext = extname(absolutePath).toLowerCase();
 
     // Return as HTML for better viewing
     const html = `<!DOCTYPE html>
 <html>
 <head>
-  <title>${basename(absolutePath)}</title>
+  <title>${basename(filePath)}</title>
   <style>
     body { font-family: 'JetBrains Mono', monospace; background: #1a1a1a; color: #e0e0e0; padding: 2rem; }
-    pre { background: #2d2d2d; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+    pre { background: #2d2d2d; padding: 1rem; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
     h1 { color: #00bcd4; font-size: 1.2rem; }
     .meta { color: #888; font-size: 0.9rem; margin-bottom: 1rem; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; margin-left: 0.5rem; }
+    .badge-db { background: #4caf50; color: white; }
+    .badge-fs { background: #ff9800; color: white; }
   </style>
 </head>
 <body>
-  <h1>${basename(absolutePath)}</h1>
-  <div class="meta">Path: ${absolutePath} | ${content.split('\n').length} lines</div>
+  <h1>${basename(filePath)} <span class="badge badge-${source === 'database' ? 'db' : 'fs'}">${source}</span></h1>
+  <div class="meta">Path: ${filePath} | ${content.split('\n').length} lines${agentName ? ` | Created by: ${agentName}` : ''}</div>
   <pre>${content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
 </body>
 </html>`;
@@ -1640,35 +1658,58 @@ app.get('/api/files/view', async (req, res) => {
   }
 });
 
-// List files in a directory
+// List files (from database, with optional prefix filter)
 app.get('/api/files/list', async (req, res) => {
   try {
-    const { path: dirPath } = req.query;
-    const targetPath = (dirPath as string) || '/app';
+    const { path: prefix } = req.query;
+    const files = await taskDb.listFiles(prefix as string | undefined);
+    res.json({
+      source: 'database',
+      count: files.length,
+      files
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to list files', details: String(error) });
+  }
+});
 
-    const { readdirSync, statSync } = await import('fs');
-    const { resolve, join } = await import('path');
+// Save a file to database (for agents to use)
+app.post('/api/files/save', async (req, res) => {
+  try {
+    const { path, content, agentName, taskId } = req.body;
 
-    const absolutePath = resolve(targetPath);
-    if (!absolutePath.startsWith('/app')) {
-      return res.status(403).json({ error: 'Access denied - only /app files allowed' });
+    if (!path || !content) {
+      return res.status(400).json({ error: 'path and content are required' });
     }
 
-    const files = readdirSync(absolutePath).map(name => {
-      const fullPath = join(absolutePath, name);
-      const stat = statSync(fullPath);
-      return {
-        name,
-        path: fullPath,
-        isDirectory: stat.isDirectory(),
-        size: stat.size,
-        modified: stat.mtime,
-      };
-    });
+    const result = await taskDb.saveFile(path, content, agentName, taskId);
 
-    res.json({ path: absolutePath, files });
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    res.status(201).json({
+      ...result,
+      viewUrl: `${baseUrl}/api/files/view?path=${encodeURIComponent(path)}`
+    });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to list directory', details: String(error) });
+    res.status(500).json({ error: 'Failed to save file', details: String(error) });
+  }
+});
+
+// Delete a file from database
+app.delete('/api/files', async (req, res) => {
+  try {
+    const { path } = req.query;
+    if (!path || typeof path !== 'string') {
+      return res.status(400).json({ error: 'path query parameter is required' });
+    }
+
+    const deleted = await taskDb.deleteFile(path);
+    if (deleted) {
+      res.status(204).send();
+    } else {
+      res.status(404).json({ error: 'File not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete file', details: String(error) });
   }
 });
 

@@ -168,11 +168,19 @@ ${task}
 3. Execute the work or delegate to other agents
 4. Create handoffs in \`docs/handoffs/\` if passing work to others
 
-### File Sharing
-When you create or modify important files, share the file path so others can view it.
-Files in \`/app/\` are viewable at: \`/api/files/view?path=/app/path/to/file\`
-Example: Created report at \`/app/docs/handoffs/research-findings.md\`
-→ View: https://ai-team-production.up.railway.app/api/files/view?path=/app/docs/handoffs/research-findings.md
+### File Storage (IMPORTANT)
+Files saved to the filesystem are lost on redeploy. To persist files, use the API:
+
+**Save a file to database:**
+\`\`\`bash
+curl -X POST https://ai-team-production.up.railway.app/api/files/save \\
+  -H "Content-Type: application/json" \\
+  -d '{"path": "/docs/my-file.md", "content": "# File content here", "agentName": "${agentName}"}'
+\`\`\`
+
+**View files at:** \`https://ai-team-production.up.railway.app/api/files/view?path=/docs/my-file.md\`
+
+When sharing file links, always use the database path format.
 
 ### AFTER Completing (Required)
 5. **Update the docs** with your changes:

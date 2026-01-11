@@ -164,6 +164,19 @@ class TaskDatabase {
         )
       `);
 
+      // File storage (persists agent-created files across deploys)
+      await this.pg.query(`
+        CREATE TABLE IF NOT EXISTS files (
+          path VARCHAR(500) PRIMARY KEY,
+          content TEXT NOT NULL,
+          agent_name VARCHAR(100),
+          task_id VARCHAR(50),
+          size INTEGER,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+
       console.log('[TaskDB] PostgreSQL tables initialized');
     } catch (err) {
       console.error('[TaskDB] Failed to initialize PostgreSQL tables:', err);
@@ -606,6 +619,75 @@ class TaskDatabase {
       }
     }
     return mappings;
+  }
+
+  // ============== File Storage ==============
+
+  async saveFile(
+    path: string,
+    content: string,
+    agentName?: string,
+    taskId?: string
+  ): Promise<{ path: string; size: number }> {
+    if (this.usePostgres && this.pg) {
+      await this.pg.query(
+        `INSERT INTO files (path, content, agent_name, task_id, size, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (path) DO UPDATE SET
+           content = $2, agent_name = $3, task_id = $4, size = $5, updated_at = NOW()`,
+        [path, content, agentName || null, taskId || null, content.length]
+      );
+      console.log(`[TaskDB] Saved file: ${path} (${content.length} bytes)`);
+    }
+    return { path, size: content.length };
+  }
+
+  async getFile(path: string): Promise<{ content: string; agentName?: string; taskId?: string; createdAt: string } | null> {
+    if (this.usePostgres && this.pg) {
+      const result = await this.pg.query(
+        'SELECT content, agent_name, task_id, created_at FROM files WHERE path = $1',
+        [path]
+      );
+      if (result.rows.length > 0) {
+        return {
+          content: result.rows[0].content,
+          agentName: result.rows[0].agent_name,
+          taskId: result.rows[0].task_id,
+          createdAt: result.rows[0].created_at,
+        };
+      }
+    }
+    return null;
+  }
+
+  async deleteFile(path: string): Promise<boolean> {
+    if (this.usePostgres && this.pg) {
+      const result = await this.pg.query('DELETE FROM files WHERE path = $1', [path]);
+      return (result.rowCount ?? 0) > 0;
+    }
+    return false;
+  }
+
+  async listFiles(prefix?: string): Promise<Array<{ path: string; size: number; agentName?: string; createdAt: string }>> {
+    if (this.usePostgres && this.pg) {
+      let query = 'SELECT path, size, agent_name, created_at FROM files';
+      const params: string[] = [];
+
+      if (prefix) {
+        query += ' WHERE path LIKE $1';
+        params.push(prefix + '%');
+      }
+      query += ' ORDER BY created_at DESC';
+
+      const result = await this.pg.query(query, params);
+      return result.rows.map(row => ({
+        path: row.path,
+        size: row.size,
+        agentName: row.agent_name,
+        createdAt: row.created_at,
+      }));
+    }
+    return [];
   }
 }
 
