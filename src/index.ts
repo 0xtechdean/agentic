@@ -32,6 +32,7 @@ let setupOutput = '';
 let setupToken = '';
 let setupPort: number | null = null;
 let setupStartTime: number | null = null;
+let setupAuthUrl: string | null = null;  // Store the full auth URL when detected
 
 app.get('/api/claude-setup/start', async (req, res) => {
   const { spawn } = await import('child_process');
@@ -45,6 +46,7 @@ app.get('/api/claude-setup/start', async (req, res) => {
   setupToken = '';
   setupPort = null;
   setupStartTime = Date.now();
+  setupAuthUrl = null;
 
   // Create a fake browser script that captures the URL and extracts the port
   const browserScript = '/tmp/capture-url.sh';
@@ -78,6 +80,18 @@ app.get('/api/claude-setup/start', async (req, res) => {
     if (portMatch) {
       setupPort = parseInt(portMatch[1]);
       console.log('[Setup] Detected callback port:', setupPort);
+    }
+
+    // Try to capture the full auth URL (look in accumulated output for complete URL)
+    // The URL ends with state=...
+    if (!setupAuthUrl) {
+      const urlMatch = setupOutput.match(
+        /https:\/\/claude\.ai\/oauth\/authorize\?[^\s\n]*state=[a-zA-Z0-9_-]+/
+      );
+      if (urlMatch) {
+        setupAuthUrl = urlMatch[0];
+        console.log('[Setup] Auth URL captured:', setupAuthUrl.substring(0, 100) + '...');
+      }
     }
 
     // Try to capture the token from output
@@ -146,28 +160,38 @@ app.get('/api/claude-setup/start', async (req, res) => {
 app.get('/api/claude-setup/status', async (req, res) => {
   const { readFileSync, existsSync } = await import('fs');
 
-  // Try to read captured URL from file
+  // Try to read captured URL from file (browser script writes here)
   let capturedUrl = null;
   try {
     if (existsSync('/tmp/claude-auth-url.txt')) {
       const content = readFileSync('/tmp/claude-auth-url.txt', 'utf-8');
-      const match = content.match(/AUTH_URL: (https:\/\/[^\s]+)/);
-      if (match) capturedUrl = match[1];
+      // The URL might be on its own line
+      const lines = content.split('\n').filter(l => l.startsWith('https://'));
+      if (lines.length > 0) {
+        capturedUrl = lines[lines.length - 1].trim();
+      }
     }
   } catch {}
 
-  // Also check output for URLs and tokens
-  const urlMatch = setupOutput.match(/https:\/\/console\.anthropic\.com[^\s\]\u001b]+/) ||
-                   setupOutput.match(/https:\/\/[^\s\]\u001b]*anthropic[^\s\]\u001b]*/);
+  // Find the full console.anthropic.com callback URL from setupOutput
+  // The URL ends with the state parameter
+  const consoleUrlMatch = setupOutput.match(
+    /https:\/\/claude\.ai\/oauth\/authorize\?[^`\n]*redirect_uri=https%3A%2F%2Fconsole\.anthropic\.com[^`\n]*/
+  );
+
+  // Also look for any auth URL as fallback
+  const anyAuthUrlMatch = setupOutput.match(/https:\/\/claude\.ai\/oauth\/authorize\?[^\s\n]+/);
+
   const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
 
-  const authUrl = capturedUrl || (urlMatch ? urlMatch[0] : null);
+  // Prefer: stored URL > captured file > console URL > any auth URL
+  const authUrl = setupAuthUrl || capturedUrl || (consoleUrlMatch ? consoleUrlMatch[0] : null) || (anyAuthUrlMatch ? anyAuthUrlMatch[0] : null);
 
   res.json({
     running: !!setupProcess,
     authUrl: authUrl,
     token: tokenMatch ? tokenMatch[0] : null,
-    output: setupOutput.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').substring(0, 2000),
+    output: setupOutput.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').substring(0, 4000),
     instructions: tokenMatch
       ? 'Token captured! Update CLAUDE_CODE_OAUTH_TOKEN in Railway with this token.'
       : authUrl
