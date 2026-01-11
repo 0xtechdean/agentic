@@ -19,7 +19,7 @@ export async function preWarmClaude(): Promise<boolean> {
   if (preWarmed) return true;
 
   console.log('[ClaudeRunner] Pre-warming Claude CLI...');
-  const result = await runClaudeCode('Say "ready" in one word', {
+  const result = await runClaudeCode('Say ready', {
     timeout: 60000,
   });
 
@@ -66,14 +66,14 @@ export async function runClaudeCode(
       claudeArgs.push('--system-prompt', systemPrompt);
     }
 
-    // For long prompts with special chars, use a temp file
-    // This avoids shell escaping issues
+    // For long prompts or prompts with newlines, use a temp file
+    // This avoids shell escaping issues with complex prompts
     let promptFile: string | null = null;
-    if (prompt.length > 500 || prompt.includes('\n') || prompt.includes('"') || prompt.includes("'")) {
+    if (prompt.length > 500 || prompt.includes('\n')) {
       promptFile = join(tmpdir(), `claude-prompt-${Date.now()}.txt`);
       writeFileSync(promptFile, prompt);
-      // Use cat to pipe file content to claude via shell
     } else {
+      // For short prompts, pass directly (escape single quotes)
       claudeArgs.push(prompt);
     }
 
