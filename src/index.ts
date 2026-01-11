@@ -102,8 +102,11 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
       return res.status(500).json({ error: 'Failed to get auth URL from CLI' });
     }
 
+    // Store in local variable for type safety (TypeScript needs explicit assertion here)
+    const authUrl: string = setupAuthUrl as string;
+
     // Find localhost callback port in the auth URL
-    const portMatch = setupAuthUrl.match(/localhost%3A(\d+)/);
+    const portMatch = authUrl.match(/localhost%3A(\d+)/);
     const callbackPort = portMatch ? parseInt(portMatch[1]) : null;
 
     console.log('[BrowserAuth] Starting browser with auth URL');
@@ -124,7 +127,7 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
     const page = await browser.newPage();
 
     // Navigate to auth URL
-    await page.goto(setupAuthUrl, { waitUntil: 'networkidle2' });
+    await page.goto(authUrl, { waitUntil: 'networkidle2' });
 
     // Check if we're on the login page
     const pageUrl = page.url();
