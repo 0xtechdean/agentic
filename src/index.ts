@@ -34,6 +34,122 @@ let setupPort: number | null = null;
 let setupStartTime: number | null = null;
 let setupAuthUrl: string | null = null;  // Store the full auth URL when detected
 
+// Screenshot the auth page to see what we're working with
+app.get('/api/claude-setup/screenshot-auth', async (req, res) => {
+  try {
+    const puppeteer = await import('puppeteer');
+    const { spawn } = await import('child_process');
+    const { writeFileSync } = await import('fs');
+    const { join } = await import('path');
+
+    console.log('[Screenshot] Starting Claude setup-token to get auth URL...');
+
+    // Start Claude setup-token process
+    let authUrl: string | null = null;
+    const proc = spawn('unbuffer', ['-p', 'claude', 'setup-token'], {
+      env: {
+        ...process.env,
+        CI: 'true',
+        TERM: 'xterm-256color',
+        DISPLAY: '',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    proc.stdout?.on('data', (data) => {
+      const chunk = data.toString();
+      console.log('[Screenshot]', chunk.substring(0, 200));
+
+      // Capture auth URL
+      const urlMatch = chunk.match(/https:\/\/claude\.ai\/oauth\/authorize\?[^\s\n]*state=[a-zA-Z0-9_-]+/);
+      if (urlMatch && !authUrl) {
+        authUrl = urlMatch[0];
+        console.log('[Screenshot] Auth URL captured');
+      }
+    });
+
+    // Wait for auth URL to appear
+    let attempts = 0;
+    while (!authUrl && attempts < 30) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      attempts++;
+    }
+
+    if (!authUrl) {
+      proc.kill();
+      return res.status(500).json({ error: 'Failed to get auth URL from CLI' });
+    }
+
+    console.log('[Screenshot] Launching browser...');
+
+    // Launch Puppeteer
+    const browser = await puppeteer.default.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    });
+
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+
+    // Navigate to auth URL
+    await page.goto(authUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+    const currentUrl = page.url();
+    console.log('[Screenshot] Current URL:', currentUrl);
+
+    // Take screenshot
+    const screenshot = await page.screenshot({ encoding: 'base64' });
+
+    // Get page HTML for debugging
+    const pageHtml = await page.content();
+
+    // Find all input elements on the page
+    const inputs = await page.$$eval('input', (els) =>
+      els.map(el => ({
+        type: el.getAttribute('type'),
+        name: el.getAttribute('name'),
+        id: el.getAttribute('id'),
+        placeholder: el.getAttribute('placeholder'),
+        className: el.className,
+      }))
+    );
+
+    // Find all buttons
+    const buttons = await page.$$eval('button', (els) =>
+      els.map(el => ({
+        type: el.getAttribute('type'),
+        text: el.textContent?.trim(),
+        className: el.className,
+      }))
+    );
+
+    await browser.close();
+    proc.kill();
+
+    // Save screenshot to public directory so it can be viewed
+    const screenshotPath = join(__dirname, '../public/auth-screenshot.png');
+    writeFileSync(screenshotPath, Buffer.from(screenshot, 'base64'));
+
+    res.json({
+      status: 'Screenshot captured',
+      currentUrl,
+      screenshotUrl: '/auth-screenshot.png',
+      inputs,
+      buttons,
+      htmlPreview: pageHtml.substring(0, 2000),
+    });
+  } catch (error) {
+    console.error('[Screenshot] Error:', error);
+    res.status(500).json({ error: 'Screenshot failed', details: String(error) });
+  }
+});
+
 // Puppeteer-based OAuth flow - runs entirely from server's IP
 app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
   const { email } = req.body;
