@@ -470,7 +470,7 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
       });
 
       // Wait for redirect to callback
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      await new Promise(resolve => setTimeout(resolve, 30000));
 
       const finalUrl = magicPage.url();
       console.log('[BrowserAuth] Final URL after authorize:', finalUrl);
@@ -507,7 +507,7 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             setupProcess.stdin.write(authCode + '\n');
 
             // Wait for CLI to process
-            await new Promise(resolve => setTimeout(resolve, 20000));
+            await new Promise(resolve => setTimeout(resolve, 60000));
 
             // Check for token
             const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
@@ -686,7 +686,7 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             setupProcess.stdin.write(authCode + '\n');
 
             // Wait for CLI to process
-            await new Promise(resolve => setTimeout(resolve, 20000));
+            await new Promise(resolve => setTimeout(resolve, 60000));
 
             // Check for token
             const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
