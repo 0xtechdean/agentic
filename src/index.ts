@@ -18,8 +18,51 @@ import { taskDb } from './taskdb';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Basic Auth credentials from environment
+const AUTH_USER = process.env.AUTH_USER || 'admin';
+const AUTH_PASS = process.env.AUTH_PASS || '';
+
+// Basic Auth middleware
+function basicAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // Skip auth if no password is set
+  if (!AUTH_PASS) {
+    return next();
+  }
+
+  // Skip auth for Slack webhooks (they use their own verification)
+  if (req.path === '/api/slack/events') {
+    return next();
+  }
+
+  // Skip auth for health check
+  if (req.path === '/health') {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Agentic Dashboard"');
+    return res.status(401).send('Authentication required');
+  }
+
+  const base64Credentials = authHeader.split(' ')[1];
+  const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+  const [username, password] = credentials.split(':');
+
+  if (username === AUTH_USER && password === AUTH_PASS) {
+    return next();
+  }
+
+  res.setHeader('WWW-Authenticate', 'Basic realm="Agentic Dashboard"');
+  return res.status(401).send('Invalid credentials');
+}
+
 app.use(cors());
 app.use(express.json());
+
+// Apply basic auth before static files
+app.use(basicAuth);
 app.use(express.static(join(__dirname, '../public')));
 
 // Initialize orchestrator
