@@ -30,6 +30,8 @@ const orchestrator = new AgentOrchestrator({
 let setupProcess: ReturnType<typeof import('child_process').spawn> | null = null;
 let setupOutput = '';
 let setupToken = '';
+let setupPort: number | null = null;
+let setupStartTime: number | null = null;
 
 app.get('/api/claude-setup/start', async (req, res) => {
   const { spawn } = await import('child_process');
@@ -41,10 +43,12 @@ app.get('/api/claude-setup/start', async (req, res) => {
 
   setupOutput = '';
   setupToken = '';
+  setupPort = null;
+  setupStartTime = Date.now();
 
-  // Create a fake browser script that captures the URL
+  // Create a fake browser script that captures the URL and extracts the port
   const browserScript = '/tmp/capture-url.sh';
-  writeFileSync(browserScript, '#!/bin/bash\necho "AUTH_URL: $1" >> /tmp/claude-auth-url.txt\necho "$1"');
+  writeFileSync(browserScript, '#!/bin/bash\necho "BROWSER_URL: $1"\necho "$1" >> /tmp/claude-auth-url.txt');
   chmodSync(browserScript, '755');
 
   // Clear previous URL
@@ -67,12 +71,20 @@ app.get('/api/claude-setup/start', async (req, res) => {
   setupProcess.stdout?.on('data', (data) => {
     const chunk = data.toString();
     setupOutput += chunk;
-    console.log('[Setup]', chunk);
+    console.log('[Setup]', chunk.substring(0, 200));
+
+    // Extract port from localhost URL
+    const portMatch = chunk.match(/localhost:(\d+)/);
+    if (portMatch) {
+      setupPort = parseInt(portMatch[1]);
+      console.log('[Setup] Detected callback port:', setupPort);
+    }
 
     // Try to capture the token from output
-    const tokenMatch = chunk.match(/sk-ant-[a-zA-Z0-9_-]+/);
+    const tokenMatch = chunk.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
     if (tokenMatch) {
       setupToken = tokenMatch[0];
+      console.log('[Setup] Token captured!');
     }
   });
 
@@ -83,37 +95,51 @@ app.get('/api/claude-setup/start', async (req, res) => {
   setupProcess.on('close', (code) => {
     console.log('[Setup] Process exited with code', code);
     setupProcess = null;
+    setupPort = null;
   });
 
-  // Wait a moment for the auth URL to appear
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  // Wait longer for the full auth URL to appear
+  await new Promise(resolve => setTimeout(resolve, 5000));
 
-  // Extract auth URL and modify redirect_uri to point to our server
-  const urlMatch = setupOutput.match(/https:\/\/claude\.ai\/oauth[^\s\]\u001b]+/) ||
-                   setupOutput.match(/https:\/\/console\.anthropic\.com[^\s\]\u001b]+/);
+  // Extract auth URL - look for the console.anthropic.com fallback URL first
+  // which doesn't require localhost callback
+  const consoleUrlMatch = setupOutput.match(/https:\/\/claude\.ai\/oauth\/authorize\?[^`\n]*/);
+  const urlMatch = consoleUrlMatch || setupOutput.match(/https:\/\/claude\.ai\/oauth[^\s\]\u001b]+/);
+  const portMatch = setupOutput.match(/localhost:(\d+)/);
 
-  let authUrl = urlMatch ? urlMatch[0] : null;
-  let serverCallbackUrl = null;
-
-  if (authUrl) {
-    // Get the server's public URL
-    const serverHost = req.headers.host || 'ai-team-production.up.railway.app';
-    const serverCallback = `https://${serverHost}/api/claude-setup/callback`;
-    serverCallbackUrl = serverCallback;
-
-    // Replace localhost callback with our server callback
-    // Note: This may not work if OAuth provider validates redirect_uri strictly
-    // In that case, user will need to manually copy the code
+  if (portMatch) {
+    setupPort = parseInt(portMatch[1]);
   }
+
+  const serverHost = req.headers.host || 'ai-team-production.up.railway.app';
+
+  // Check if we have the console callback URL (preferred - no localhost needed)
+  const hasConsoleCallback = urlMatch && urlMatch[0].includes('console.anthropic.com');
 
   res.json({
     status: 'started',
-    authUrl: authUrl,
-    serverCallback: serverCallbackUrl,
-    instructions: authUrl
-      ? `1. Open authUrl in browser\n2. Authenticate\n3. When redirected to localhost (will fail), copy the full URL\n4. Replace 'localhost:XXXXX' with '${req.headers.host}/api/claude-setup' and visit that URL\n5. Check /api/claude-setup/status for the token`
-      : 'Waiting for auth URL... Call /api/claude-setup/status to check progress',
-    output: setupOutput.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').substring(0, 500),
+    authUrl: urlMatch ? urlMatch[0] : null,
+    callbackPort: setupPort,
+    serverCallback: `https://${serverHost}/api/claude-setup/callback`,
+    processRunning: !!setupProcess,
+    instructions: hasConsoleCallback
+      ? [
+          '1. Open the authUrl in your browser',
+          '2. Authenticate with Claude',
+          '3. You will see a code on console.anthropic.com',
+          '4. Copy that code',
+          `5. POST to ${serverHost}/api/claude-setup/send-code with {"code": "YOUR_CODE"}`,
+          '6. Check /api/claude-setup/status for the token',
+        ]
+      : [
+          '1. Open the authUrl in your browser',
+          '2. Authenticate with Claude',
+          '3. When redirected to localhost (page won\'t load), copy the FULL URL from browser',
+          `4. Replace "localhost:${setupPort || 'XXXXX'}" with "${serverHost}/api/claude-setup"`,
+          '5. Visit that modified URL - it will forward to the server',
+          '6. Check /api/claude-setup/status for the token',
+        ],
+    output: setupOutput.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').substring(0, 1200),
   });
 });
 
@@ -235,6 +261,53 @@ app.post('/api/claude-setup/set-token', express.json(), async (req, res) => {
     note: 'Token saved to env and ~/.claude/.oauth_token. Test with /api/run-agent',
     tokenPreview: token.substring(0, 20) + '...',
   });
+});
+
+// Send code to CLI stdin - for console.anthropic.com callback flow
+app.post('/api/claude-setup/send-code', express.json(), async (req, res) => {
+  const { code } = req.body;
+
+  if (!code) {
+    return res.status(400).json({ error: 'Code is required' });
+  }
+
+  if (!setupProcess || !setupProcess.stdin) {
+    return res.status(400).json({
+      error: 'No setup process running',
+      hint: 'Start the setup first with GET /api/claude-setup/start',
+    });
+  }
+
+  console.log('[Setup] Sending code to CLI stdin:', code.substring(0, 20) + '...');
+
+  try {
+    // Send the code followed by newline
+    setupProcess.stdin.write(code + '\n');
+
+    // Wait a moment for the CLI to process
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // Check if token was captured
+    const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+
+    res.json({
+      status: 'Code sent to CLI',
+      token: tokenMatch ? tokenMatch[0] : null,
+      processRunning: !!setupProcess,
+      hint: tokenMatch
+        ? 'Token captured! Setting it now...'
+        : 'Check /api/claude-setup/status for the token',
+    });
+
+    // If token found, auto-set it
+    if (tokenMatch) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = tokenMatch[0];
+      console.log('[Setup] Auto-set token from captured output');
+    }
+  } catch (error) {
+    console.error('[Setup] Failed to send code:', error);
+    res.status(500).json({ error: 'Failed to send code to CLI', details: String(error) });
+  }
 });
 
 // Health check
