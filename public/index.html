@@ -525,6 +525,149 @@
       border-bottom: none;
     }
 
+    /* CLI Terminal Monitor */
+    .cli-terminal {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 12px;
+      overflow: hidden;
+    }
+
+    .cli-header {
+      background: #161b22;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid #30363d;
+    }
+
+    .cli-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .cli-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .cli-dot.red { background: #ff5f56; }
+    .cli-dot.yellow { background: #ffbd2e; }
+    .cli-dot.green { background: #27c93f; }
+
+    .cli-title {
+      color: #8b949e;
+      font-size: 11px;
+      flex: 1;
+      text-align: center;
+    }
+
+    .cli-status {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #238636;
+      color: white;
+    }
+
+    .cli-status.running {
+      background: #1f6feb;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .cli-body {
+      padding: 12px;
+      max-height: 500px;
+      overflow-y: auto;
+      color: #c9d1d9;
+    }
+
+    .cli-line {
+      margin-bottom: 4px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .cli-line.prompt {
+      color: #58a6ff;
+    }
+
+    .cli-line.prompt::before {
+      content: '❯ ';
+      color: #238636;
+    }
+
+    .cli-line.output {
+      color: #8b949e;
+      padding-left: 16px;
+    }
+
+    .cli-line.tool {
+      color: #d2a8ff;
+    }
+
+    .cli-line.tool::before {
+      content: '⚡ ';
+    }
+
+    .cli-line.file {
+      color: #7ee787;
+    }
+
+    .cli-line.file::before {
+      content: '📄 ';
+    }
+
+    .cli-line.error {
+      color: #f85149;
+    }
+
+    .cli-line.error::before {
+      content: '✗ ';
+    }
+
+    .cli-line.success {
+      color: #3fb950;
+    }
+
+    .cli-line.success::before {
+      content: '✓ ';
+    }
+
+    .cli-line.info {
+      color: #58a6ff;
+    }
+
+    .cli-line.info::before {
+      content: 'ℹ ';
+    }
+
+    .cli-timestamp {
+      color: #484f58;
+      font-size: 10px;
+      margin-right: 8px;
+    }
+
+    .cli-link {
+      color: #58a6ff;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .cli-link:hover {
+      color: #79c0ff;
+    }
+
     .trace-time {
       color: var(--text-muted);
       font-size: 10px;
@@ -1264,9 +1407,19 @@
                 <div class="trace-stat-label">Tool Calls</div>
               </div>
             </div>
-            <div class="section-body" style="max-height:500px;padding:0;">
-              <div class="traces-list" id="detail-traces">
-                <div class="no-data">No activity recorded yet.</div>
+            <!-- CLI Terminal Monitor -->
+            <div class="cli-terminal" id="cli-terminal">
+              <div class="cli-header">
+                <div class="cli-dots">
+                  <div class="cli-dot red"></div>
+                  <div class="cli-dot yellow"></div>
+                  <div class="cli-dot green"></div>
+                </div>
+                <div class="cli-title" id="cli-title">Agent Monitor</div>
+                <div class="cli-status" id="cli-status">Ready</div>
+              </div>
+              <div class="cli-body" id="cli-body">
+                <div class="cli-line info">Waiting for agent activity...</div>
               </div>
             </div>
           </div>
@@ -1274,6 +1427,7 @@
           <div style="margin-top:1rem;display:flex;gap:0.5rem;">
             <button class="btn btn-primary" id="detail-run-btn" onclick="runDetailAgent()">RUN AGENT</button>
             <button class="btn btn-danger" onclick="deleteDetailTask()">DELETE</button>
+            <button class="btn" onclick="refreshCliMonitor()">↻ REFRESH</button>
           </div>
         </div>
       </div>
@@ -1850,13 +2004,15 @@
 
     async function loadTaskTraces(taskId) {
       try {
-        const [tracesRes, statsRes] = await Promise.all([
+        const [tracesRes, statsRes, taskRes] = await Promise.all([
           fetch(`${API_BASE}/api/tasks/${taskId}/traces?limit=100`),
-          fetch(`${API_BASE}/api/tasks/${taskId}/traces/stats`)
+          fetch(`${API_BASE}/api/tasks/${taskId}/traces/stats`),
+          fetch(`${API_BASE}/api/tasks/${taskId}`)
         ]);
 
         const traces = await tracesRes.json();
         const stats = await statsRes.json();
+        const task = await taskRes.json();
 
         document.getElementById('detail-trace-count').textContent = `${stats.totalTraces || 0} events`;
         document.getElementById('detail-stat-events').textContent = stats.totalTraces || 0;
@@ -1865,25 +2021,85 @@
         document.getElementById('detail-stat-llm').textContent = stats.byEventType?.llm_call || 0;
         document.getElementById('detail-stat-tools').textContent = stats.byEventType?.tool_call || 0;
 
-        const container = document.getElementById('detail-traces');
+        // Update CLI terminal
+        const cliBody = document.getElementById('cli-body');
+        const cliTitle = document.getElementById('cli-title');
+        const cliStatus = document.getElementById('cli-status');
+
+        cliTitle.textContent = `${task.owner || 'Agent'} — ${task.title?.substring(0, 40) || 'Task'}`;
+
+        // Set status
+        if (task.status === 'in_progress') {
+          cliStatus.textContent = 'Running';
+          cliStatus.className = 'cli-status running';
+        } else if (task.status === 'done') {
+          cliStatus.textContent = 'Completed';
+          cliStatus.className = 'cli-status';
+        } else {
+          cliStatus.textContent = task.status;
+          cliStatus.className = 'cli-status';
+        }
+
         if (!traces || traces.length === 0) {
-          container.innerHTML = '<div class="no-data">No activity recorded yet.</div>';
+          cliBody.innerHTML = '<div class="cli-line info">Waiting for agent activity...</div>';
           return;
         }
 
-        container.innerHTML = traces.map(t => `
-          <div class="trace-item">
-            <span class="trace-time">${formatTime(t.createdAt)}</span>
-            <span class="trace-type ${t.eventType}">${t.eventType}</span>
-            <span class="trace-content">${escapeHtml(t.content)}</span>
-            <span class="trace-meta">
-              ${t.tokens ? `${t.tokens} tok` : ''}
-              ${t.latencyMs ? `${t.latencyMs}ms` : ''}
-            </span>
-          </div>
-        `).join('');
+        // Render traces as CLI output
+        cliBody.innerHTML = traces.map(t => {
+          const time = formatTime(t.createdAt);
+          const content = escapeHtml(t.content);
+          let lineClass = 'cli-line';
+          let extra = '';
+
+          switch (t.eventType) {
+            case 'start':
+              lineClass += ' prompt';
+              break;
+            case 'tool_call':
+              lineClass += ' tool';
+              // Check for file operations
+              if (t.metadata?.filePath) {
+                lineClass = 'cli-line file';
+                const viewUrl = t.metadata.viewUrl;
+                if (viewUrl) {
+                  extra = `<a class="cli-link" href="${viewUrl}" target="_blank">View File</a>`;
+                }
+              }
+              break;
+            case 'llm_call':
+              lineClass += ' output';
+              break;
+            case 'error':
+              lineClass += ' error';
+              break;
+            case 'complete':
+              lineClass += ' success';
+              break;
+            default:
+              lineClass += ' info';
+          }
+
+          const meta = [];
+          if (t.tokens) meta.push(`${t.tokens} tokens`);
+          if (t.latencyMs) meta.push(`${t.latencyMs}ms`);
+          const metaStr = meta.length ? `<span style="color:#484f58;margin-left:8px">(${meta.join(', ')})</span>` : '';
+
+          return `<div class="${lineClass}"><span class="cli-timestamp">${time}</span>${content}${metaStr} ${extra}</div>`;
+        }).join('');
+
+        // Auto-scroll to bottom if running
+        if (task.status === 'in_progress') {
+          cliBody.scrollTop = cliBody.scrollHeight;
+        }
       } catch (error) {
         console.error('Failed to load traces:', error);
+      }
+    }
+
+    function refreshCliMonitor() {
+      if (selectedTaskId) {
+        loadTaskTraces(selectedTaskId);
       }
     }
 
@@ -2174,9 +2390,29 @@
     fetchAgents();
     fetchTasks();
     setInterval(fetchTasks, 30000);
+    // Slow refresh for global views
     setInterval(() => {
       if (currentView === 'traces') loadGlobalTraces();
-      if (currentView === 'task-detail' && selectedTaskId) loadTaskTraces(selectedTaskId);
+    }, 10000);
+
+    // Fast refresh for task detail when in_progress (CLI monitor)
+    setInterval(() => {
+      if (currentView === 'task-detail' && selectedTaskId) {
+        const task = tasks.find(t => t.id === selectedTaskId);
+        if (task?.status === 'in_progress') {
+          loadTaskTraces(selectedTaskId);
+        }
+      }
+    }, 2000);
+
+    // Normal refresh for task detail
+    setInterval(() => {
+      if (currentView === 'task-detail' && selectedTaskId) {
+        const task = tasks.find(t => t.id === selectedTaskId);
+        if (task?.status !== 'in_progress') {
+          loadTaskTraces(selectedTaskId);
+        }
+      }
     }, 10000);
   </script>
 </body>
