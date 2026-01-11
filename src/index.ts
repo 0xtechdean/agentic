@@ -504,7 +504,7 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
 
             // Send code with just newline
-            setupProcess.stdin.write(authCode + '\n');
+            setupProcess.stdin.write(authCode + '\r');
 
             // Wait for CLI to process - poll every 2 seconds for up to 10 min
             let tokenMatch = null;
@@ -695,7 +695,7 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
 
             // Send code with just newline
-            setupProcess.stdin.write(authCode + '\n');
+            setupProcess.stdin.write(authCode + '\r');
 
             // Wait for CLI to process - poll every 2 seconds for up to 10 min
             let tokenMatch = null;
@@ -984,7 +984,7 @@ app.post('/api/claude-setup/complete-with-code', express.json(), async (req, res
     console.log('[Setup] Using existing CLI process, sending code:', code.substring(0, 30) + '...');
 
     // Send code to existing CLI
-    setupProcess.stdin.write(code + '\n');
+    setupProcess.stdin.write(code + '\r');
 
     // Wait for token to appear
     let tokenFound = false;
@@ -1162,7 +1162,7 @@ app.post('/api/claude-setup/send-code', express.json(), async (req, res) => {
 
   try {
     // Send the code followed by newline, then flush
-    const written = setupProcess.stdin.write(code + '\n', 'utf8');
+    const written = setupProcess.stdin.write(code + '\r', 'utf8');
     console.log('[Setup] Write returned:', written);
 
     // Ensure the write is flushed
