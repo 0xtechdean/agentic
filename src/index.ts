@@ -469,8 +469,8 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
         if (authBtn) authBtn.click();
       });
 
-      // Wait for redirect to callback (10 min)
-      await new Promise(resolve => setTimeout(resolve, 600000));
+      // Wait for redirect to callback - shorter wait since page load is quick
+      await new Promise(resolve => setTimeout(resolve, 10000));
 
       const finalUrl = magicPage.url();
       console.log('[BrowserAuth] Final URL after authorize:', finalUrl);
@@ -506,11 +506,23 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             // Send code with just newline
             setupProcess.stdin.write(authCode + '\n');
 
-            // Wait for CLI to process (10 min)
-            await new Promise(resolve => setTimeout(resolve, 600000));
+            // Wait for CLI to process - poll every 2 seconds for up to 10 min
+            let tokenMatch = null;
+            for (let i = 0; i < 300; i++) {  // 300 * 2s = 10 min
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+              if (tokenMatch) {
+                console.log('[BrowserAuth] Token found after', (i + 1) * 2, 'seconds');
+                break;
+              }
+              // Also check if CLI finished (no longer waiting for input)
+              if (setupOutput.includes('successfully') || setupOutput.includes('Token saved')) {
+                console.log('[BrowserAuth] CLI completed after', (i + 1) * 2, 'seconds');
+                break;
+              }
+            }
 
-            // Check for token
-            const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+            // Final check for token
             if (tokenMatch) {
               setupToken = tokenMatch[0];
               process.env.CLAUDE_CODE_OAUTH_TOKEN = setupToken;
@@ -685,11 +697,23 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             // Send code with just newline
             setupProcess.stdin.write(authCode + '\n');
 
-            // Wait for CLI to process (10 min)
-            await new Promise(resolve => setTimeout(resolve, 600000));
+            // Wait for CLI to process - poll every 2 seconds for up to 10 min
+            let tokenMatch = null;
+            for (let i = 0; i < 300; i++) {  // 300 * 2s = 10 min
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+              if (tokenMatch) {
+                console.log('[BrowserAuth] Token found after', (i + 1) * 2, 'seconds');
+                break;
+              }
+              // Also check if CLI finished (no longer waiting for input)
+              if (setupOutput.includes('successfully') || setupOutput.includes('Token saved')) {
+                console.log('[BrowserAuth] CLI completed after', (i + 1) * 2, 'seconds');
+                break;
+              }
+            }
 
-            // Check for token
-            const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+            // Final check for token
             if (tokenMatch) {
               setupToken = tokenMatch[0];
               process.env.CLAUDE_CODE_OAUTH_TOKEN = setupToken;
