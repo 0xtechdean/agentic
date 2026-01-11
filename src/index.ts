@@ -33,6 +33,7 @@ let setupToken = '';
 
 app.get('/api/claude-setup/start', async (req, res) => {
   const { spawn } = await import('child_process');
+  const { writeFileSync, chmodSync } = await import('fs');
 
   if (setupProcess) {
     setupProcess.kill();
@@ -41,9 +42,26 @@ app.get('/api/claude-setup/start', async (req, res) => {
   setupOutput = '';
   setupToken = '';
 
-  // Run claude setup-token with unbuffer for pseudo-TTY
+  // Create a fake browser script that captures the URL
+  const browserScript = '/tmp/capture-url.sh';
+  writeFileSync(browserScript, '#!/bin/bash\necho "AUTH_URL: $1" >> /tmp/claude-auth-url.txt\necho "$1"');
+  chmodSync(browserScript, '755');
+
+  // Clear previous URL
+  try {
+    const { unlinkSync } = await import('fs');
+    unlinkSync('/tmp/claude-auth-url.txt');
+  } catch {}
+
+  // Run claude setup-token with fake browser to capture URL
   setupProcess = spawn('unbuffer', ['claude', 'setup-token'], {
-    env: { ...process.env, CI: 'true', TERM: 'xterm-256color' },
+    env: {
+      ...process.env,
+      CI: 'true',
+      TERM: 'xterm-256color',
+      BROWSER: browserScript,
+      DISPLAY: '',  // Disable X11
+    },
   });
 
   setupProcess.stdout?.on('data', (data) => {
@@ -83,19 +101,36 @@ app.get('/api/claude-setup/start', async (req, res) => {
   });
 });
 
-app.get('/api/claude-setup/status', (req, res) => {
-  // Extract auth URL and token from current output
-  const urlMatch = setupOutput.match(/https:\/\/console\.anthropic\.com[^\s\]]+/);
-  const tokenMatch = setupOutput.match(/sk-ant-[a-zA-Z0-9_-]+/);
+app.get('/api/claude-setup/status', async (req, res) => {
+  const { readFileSync, existsSync } = await import('fs');
+
+  // Try to read captured URL from file
+  let capturedUrl = null;
+  try {
+    if (existsSync('/tmp/claude-auth-url.txt')) {
+      const content = readFileSync('/tmp/claude-auth-url.txt', 'utf-8');
+      const match = content.match(/AUTH_URL: (https:\/\/[^\s]+)/);
+      if (match) capturedUrl = match[1];
+    }
+  } catch {}
+
+  // Also check output for URLs and tokens
+  const urlMatch = setupOutput.match(/https:\/\/console\.anthropic\.com[^\s\]\u001b]+/) ||
+                   setupOutput.match(/https:\/\/[^\s\]\u001b]*anthropic[^\s\]\u001b]*/);
+  const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+
+  const authUrl = capturedUrl || (urlMatch ? urlMatch[0] : null);
 
   res.json({
     running: !!setupProcess,
-    authUrl: urlMatch ? urlMatch[0] : null,
+    authUrl: authUrl,
     token: tokenMatch ? tokenMatch[0] : null,
-    output: setupOutput.substring(0, 2000),
+    output: setupOutput.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').substring(0, 2000),
     instructions: tokenMatch
       ? 'Token captured! Update CLAUDE_CODE_OAUTH_TOKEN in Railway with this token.'
-      : 'Complete authentication in browser, then refresh this endpoint.',
+      : authUrl
+        ? 'Open authUrl in your browser to authenticate, then check status again.'
+        : 'Waiting for auth URL... Check status again in a few seconds.',
   });
 });
 
