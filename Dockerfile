@@ -3,11 +3,12 @@
 
 FROM node:20-slim
 
-# Install dependencies
+# Install dependencies (expect provides unbuffer for pseudo-TTY)
 RUN apt-get update && apt-get install -y \
     git \
     curl \
     ca-certificates \
+    expect \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude CLI globally

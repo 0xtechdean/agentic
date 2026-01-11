@@ -1,8 +1,7 @@
 /**
  * Claude Code Runner
  * Runs Claude Code CLI for agent tasks using Pro subscription
- * NOTE: This only works locally where stdin can be inherited
- * For server/Docker environments, use API mode instead (USE_CLAUDE_CODE=false)
+ * Uses `unbuffer` (from expect) to create pseudo-TTY for Docker environments
  */
 
 import { spawn } from 'child_process';
@@ -12,7 +11,6 @@ let preWarmed = false;
 
 /**
  * Pre-warm the Claude CLI by running a simple command
- * This loads the CLI into memory and validates authentication
  */
 export async function preWarmClaude(): Promise<boolean> {
   if (preWarmed) return true;
@@ -50,41 +48,57 @@ export async function runClaudeCode(
   const {
     systemPrompt,
     workingDir = process.cwd(),
-    timeout = 300000, // 5 minutes default
+    timeout = 300000,
     model = 'sonnet',
   } = options;
 
   return new Promise((resolve) => {
-    const args = [
-      '-p', // Print mode (non-interactive)
+    const claudeArgs = [
+      '-p',
       '--model', model,
-      '--dangerously-skip-permissions', // Skip all permission prompts
+      '--dangerously-skip-permissions',
     ];
 
     if (systemPrompt) {
-      args.push('--system-prompt', systemPrompt);
+      claudeArgs.push('--system-prompt', systemPrompt);
     }
 
-    // Add the prompt
-    args.push(prompt);
+    claudeArgs.push(prompt);
 
     const hasToken = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
     console.log(`[ClaudeRunner] Running with model: ${model}`);
     console.log(`[ClaudeRunner] OAuth token present: ${hasToken}`);
-    console.log(`[ClaudeRunner] Token preview: ${hasToken ? process.env.CLAUDE_CODE_OAUTH_TOKEN?.substring(0, 20) + '...' : 'none'}`);
     console.log(`[ClaudeRunner] Prompt: ${prompt.substring(0, 100)}...`);
 
-    // NOTE: stdin must be inherited for Claude CLI to work
-    // This means CLI mode only works locally, not in Docker/server environments
-    const child = spawn('claude', args, {
-      cwd: workingDir,
-      env: {
-        ...process.env,
-        CI: 'true',
-        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
-      },
-      stdio: ['inherit', 'pipe', 'pipe'],
-    });
+    // Try unbuffer first (creates a PTY), fall back to direct spawn
+    // unbuffer is from the 'expect' package
+    const useUnbuffer = process.env.USE_UNBUFFER !== 'false';
+
+    let child;
+    if (useUnbuffer) {
+      // unbuffer creates a pseudo-TTY which Claude CLI needs
+      child = spawn('unbuffer', ['claude', ...claudeArgs], {
+        cwd: workingDir,
+        env: {
+          ...process.env,
+          CI: 'true',
+          TERM: 'xterm-256color',
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } else {
+      // Direct spawn (only works when stdin is a TTY)
+      child = spawn('claude', claudeArgs, {
+        cwd: workingDir,
+        env: {
+          ...process.env,
+          CI: 'true',
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
+        },
+        stdio: ['inherit', 'pipe', 'pipe'],
+      });
+    }
 
     let stdout = '';
     let stderr = '';
@@ -101,7 +115,7 @@ export async function runClaudeCode(
       child.kill('SIGTERM');
       resolve({
         success: false,
-        output: stdout,
+        output: cleanOutput(stdout),
         error: 'Timeout exceeded',
       });
     }, timeout);
@@ -109,18 +123,20 @@ export async function runClaudeCode(
     child.on('close', (code) => {
       clearTimeout(timer);
 
+      const output = cleanOutput(stdout);
+
       if (code === 0) {
-        console.log(`[ClaudeRunner] Success, output length: ${stdout.length}`);
+        console.log(`[ClaudeRunner] Success, output length: ${output.length}`);
         resolve({
           success: true,
-          output: stdout,
+          output,
         });
       } else {
         console.error(`[ClaudeRunner] Failed with code ${code}`);
         console.error(`[ClaudeRunner] stderr: ${stderr}`);
         resolve({
           success: false,
-          output: stdout,
+          output,
           error: stderr || `Process exited with code ${code}`,
         });
       }
@@ -129,6 +145,15 @@ export async function runClaudeCode(
     child.on('error', (err) => {
       clearTimeout(timer);
       console.error(`[ClaudeRunner] Spawn error:`, err);
+
+      // If unbuffer failed, try without it
+      if (useUnbuffer && err.message.includes('ENOENT')) {
+        console.log('[ClaudeRunner] unbuffer not found, trying direct spawn...');
+        process.env.USE_UNBUFFER = 'false';
+        runClaudeCode(prompt, options).then(resolve);
+        return;
+      }
+
       resolve({
         success: false,
         output: '',
@@ -136,6 +161,19 @@ export async function runClaudeCode(
       });
     });
   });
+}
+
+/**
+ * Clean up terminal output
+ */
+function cleanOutput(output: string): string {
+  return output
+    // Remove ANSI escape codes
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+    // Remove carriage returns
+    .replace(/\r/g, '')
+    // Trim whitespace
+    .trim();
 }
 
 // Wrapper for agent tasks
@@ -162,7 +200,7 @@ Output your actions and results in a structured format.`;
 
   const result = await runClaudeCode(fullPrompt, {
     model: 'sonnet',
-    timeout: 180000, // 3 minutes
+    timeout: 180000,
   });
 
   if (result.success) {
