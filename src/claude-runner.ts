@@ -50,6 +50,8 @@ export async function runClaudeCode(
         ...process.env,
         // Disable interactive features
         CI: 'true',
+        // Use OAuth token from setup-token command
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -192,7 +192,7 @@ Output your actions and results in a structured format.`;
       console.log('[Orchestrator] Using Claude Code CLI...');
       const claudeResult = await runClaudeCode(systemPrompt, {
         model: 'sonnet',
-        timeout: 180000,
+        timeout: 600000, // 10 minutes for complex tasks
       });
 
       if (!claudeResult.success) {
