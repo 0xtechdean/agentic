@@ -185,14 +185,19 @@ ${triggeredSuggestions}
 Output your actions and results in a structured format.`;
 
     let result: string;
+    const hasValidTaskId = !!context?.taskId;
 
-    // Log task start trace
-    await taskDb.logTrace(taskId, agentName, 'start', `Started: ${task.substring(0, 100)}`, {});
+    // Log task start trace (only if we have a valid task in DB)
+    if (hasValidTaskId) {
+      await taskDb.logTrace(taskId, agentName, 'start', `Started: ${task.substring(0, 100)}`, {});
+    }
 
     if (USE_CLAUDE_CODE) {
       // Use Claude Code CLI (uses Pro subscription)
       console.log('[Orchestrator] Using Claude Code CLI...');
-      await taskDb.logTrace(taskId, agentName, 'tool_call', 'Running via Claude Code CLI', {});
+      if (hasValidTaskId) {
+        await taskDb.logTrace(taskId, agentName, 'tool_call', 'Running via Claude Code CLI', {});
+      }
 
       const claudeResult = await runClaudeCode(systemPrompt, {
         model: 'sonnet',
@@ -200,7 +205,9 @@ Output your actions and results in a structured format.`;
       });
 
       if (!claudeResult.success) {
-        await taskDb.logTrace(taskId, agentName, 'error', claudeResult.error || 'Execution failed', {});
+        if (hasValidTaskId) {
+          await taskDb.logTrace(taskId, agentName, 'error', claudeResult.error || 'Execution failed', {});
+        }
         throw new Error(claudeResult.error || 'Claude Code execution failed');
       }
       result = claudeResult.output;
@@ -223,8 +230,10 @@ Output your actions and results in a structured format.`;
     const executionTime = Date.now() - startTime;
     const learnings = this.extractLearnings(result);
 
-    // Log completion trace
-    await taskDb.logTrace(taskId, agentName, 'complete', `Completed in ${Math.round(executionTime / 1000)}s`, { learnings }, undefined, executionTime);
+    // Log completion trace (only if we have a valid task in DB)
+    if (hasValidTaskId) {
+      await taskDb.logTrace(taskId, agentName, 'complete', `Completed in ${Math.round(executionTime / 1000)}s`, { learnings }, undefined, executionTime);
+    }
 
     await this.processAgentRequests(agentName, result, canCreateAgents, canCreateSkills);
 
