@@ -179,7 +179,7 @@ app.get('/api/claude-setup/screenshot-auth', async (req, res) => {
   }
 });
 
-// Puppeteer-based OAuth flow - runs entirely from server's IP
+// Puppeteer-based OAuth flow - runs entirely from server's IP (with stealth to bypass Cloudflare)
 app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
   const { email } = req.body;
 
@@ -188,8 +188,14 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
   }
 
   try {
-    const puppeteer = await import('puppeteer');
+    const puppeteerExtra = await import('puppeteer-extra');
+    const StealthPlugin = await import('puppeteer-extra-plugin-stealth');
     const { spawn } = await import('child_process');
+    const { writeFileSync } = await import('fs');
+    const { join } = await import('path');
+
+    // Add stealth plugin to avoid Cloudflare detection
+    puppeteerExtra.default.use(StealthPlugin.default());
 
     // Kill any existing setup process
     if (setupProcess) {
@@ -254,67 +260,124 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
     const portMatch = authUrl.match(/localhost%3A(\d+)/);
     const callbackPort = portMatch ? parseInt(portMatch[1]) : null;
 
-    console.log('[BrowserAuth] Starting browser with auth URL');
+    console.log('[BrowserAuth] Starting stealth browser with auth URL');
     console.log('[BrowserAuth] Callback port:', callbackPort);
 
-    // Launch Puppeteer to handle OAuth from server's IP
-    const browser = await puppeteer.default.launch({
+    // Launch Puppeteer with stealth plugin to handle OAuth from server's IP
+    const browser = await puppeteerExtra.default.launch({
       headless: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--window-size=1280,800',
       ],
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
     });
 
     const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
     // Navigate to auth URL
-    await page.goto(authUrl, { waitUntil: 'networkidle2' });
+    console.log('[BrowserAuth] Navigating to auth URL...');
+    await page.goto(authUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Check if we're on the login page
+    // Wait for Cloudflare challenge to complete (up to 30 seconds)
+    console.log('[BrowserAuth] Waiting for Cloudflare challenge...');
+    let cfAttempts = 0;
+    while (cfAttempts < 30) {
+      const title = await page.title();
+      if (!title.includes('moment') && !title.includes('Cloudflare')) {
+        console.log('[BrowserAuth] Cloudflare challenge passed!');
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      cfAttempts++;
+    }
+
+    // Wait a bit more for page to fully load
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     const pageUrl = page.url();
+    const pageTitle = await page.title();
     console.log('[BrowserAuth] Current URL:', pageUrl);
+    console.log('[BrowserAuth] Page title:', pageTitle);
 
     // Take screenshot for debugging
     const screenshot = await page.screenshot({ encoding: 'base64' });
 
     // Look for email input and enter it
     try {
-      // Wait for email input
-      await page.waitForSelector('input[type="email"], input[name="email"], input[placeholder*="email"]', { timeout: 10000 });
-      await page.type('input[type="email"], input[name="email"], input[placeholder*="email"]', email);
-
-      // Click continue/submit button
-      const buttons = await page.$$('button[type="submit"], button:contains("Continue"), button:contains("Sign in")');
-      if (buttons.length > 0) {
-        await buttons[0].click();
+      // First, try to accept cookies if the banner is present
+      try {
+        const acceptButton = await page.$('button:has-text("Accept All Cookies")');
+        if (acceptButton) {
+          console.log('[BrowserAuth] Clicking accept cookies...');
+          await acceptButton.click();
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      } catch {
+        // Cookie banner not present or already dismissed
       }
 
-      // Wait for magic link message or next step
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Wait for email input (using the correct selector we discovered)
+      console.log('[BrowserAuth] Waiting for email input...');
+      await page.waitForSelector('#email', { timeout: 15000 });
 
+      // Type email
+      console.log('[BrowserAuth] Typing email:', email);
+      await page.type('#email', email, { delay: 50 });
+
+      // Click submit button
+      console.log('[BrowserAuth] Clicking submit button...');
+      await page.click('button[type="submit"]');
+
+      // Wait for response
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Take another screenshot after submission
+      const afterScreenshot = await page.screenshot({ encoding: 'base64' });
+
+      // Save screenshots to public directory
+      const screenshotPath = join(__dirname, '../public/auth-before.png');
+      const afterPath = join(__dirname, '../public/auth-after.png');
+      writeFileSync(screenshotPath, Buffer.from(screenshot, 'base64'));
+      writeFileSync(afterPath, Buffer.from(afterScreenshot, 'base64'));
+
+      // Get page content to see response
       const pageContent = await page.content();
+
+      // Check if we're now on a "check your email" page
+      const bodyText = await page.evaluate(() => document.body.innerText);
 
       await browser.close();
 
       res.json({
         status: 'Email submitted',
-        message: 'Check your email for a magic link. Click it from THIS PAGE (copy the link and paste it into the next endpoint)',
-        currentUrl: page.url(),
-        screenshotBase64: screenshot.substring(0, 200) + '...',
-        nextStep: 'POST /api/claude-setup/browser-callback with the magic link URL',
+        message: 'Check your email for a magic link. Forward the magic link URL to the next endpoint.',
+        pageTitle: await page.title().catch(() => 'unknown'),
+        currentUrl: pageUrl,
+        bodyPreview: bodyText.substring(0, 500),
+        screenshotBefore: '/auth-before.png',
+        screenshotAfter: '/auth-after.png',
+        nextStep: 'POST /api/claude-setup/browser-magic-link with { "magicLink": "https://..." }',
         callbackPort,
       });
     } catch (e) {
+      // Save error screenshot
+      const errorPath = join(__dirname, '../public/auth-error.png');
+      writeFileSync(errorPath, Buffer.from(screenshot, 'base64'));
+
       await browser.close();
       res.status(500).json({
         error: 'Failed to interact with login page',
         details: String(e),
         pageUrl,
-        screenshotBase64: screenshot,
+        pageTitle,
+        screenshotUrl: '/auth-error.png',
       });
     }
   } catch (error) {
