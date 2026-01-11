@@ -453,15 +453,111 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
     const magicScreenshot = await magicPage.screenshot({ encoding: 'base64' });
     writeFileSync(join(__dirname, '../public/magic-link-result.png'), Buffer.from(magicScreenshot, 'base64'));
 
-    // Extract the verification code (6-digit number)
+    // Check what page we're on - could be verification code OR OAuth consent page
     const pageText = await magicPage.evaluate(() => document.body.innerText);
     console.log('[BrowserAuth] Magic link page text:', pageText.substring(0, 300));
 
+    // Check if we're on the OAuth consent page (means we're already logged in from same browser)
+    if (pageText.includes('Authorize') && pageText.includes('would like to connect')) {
+      console.log('[BrowserAuth] On OAuth consent page - clicking Authorize...');
+
+      // Click the Authorize button
+      await magicPage.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const authBtn = buttons.find(btn => btn.textContent?.includes('Authorize'));
+        if (authBtn) authBtn.click();
+      });
+
+      // Wait for redirect to callback
+      await new Promise(resolve => setTimeout(resolve, 10000));
+
+      const finalUrl = magicPage.url();
+      console.log('[BrowserAuth] Final URL after authorize:', finalUrl);
+
+      // Take screenshot
+      const finalScreenshot = await magicPage.screenshot({ encoding: 'base64' });
+      writeFileSync(join(__dirname, '../public/auth-final.png'), Buffer.from(finalScreenshot, 'base64'));
+
+      // Check if we're on the callback page
+      if (finalUrl.includes('console.anthropic.com') && finalUrl.includes('callback')) {
+        console.log('[BrowserAuth] On callback page, extracting auth code...');
+
+        const callbackText = await magicPage.evaluate(() => document.body.innerText);
+        console.log('[BrowserAuth] Callback page text:', callbackText.substring(0, 500));
+
+        // Extract the auth code (long alphanumeric string)
+        const authCodeMatch = callbackText.match(/([A-Za-z0-9_-]{40,})/);
+        if (authCodeMatch) {
+          const authCode = authCodeMatch[1];
+          console.log('[BrowserAuth] Found auth code:', authCode.substring(0, 20) + '...');
+
+          // Feed the auth code to the CLI
+          if (setupProcess && setupProcess.stdin) {
+            console.log('[BrowserAuth] Sending auth code to CLI...');
+            setupProcess.stdin.write(authCode + '\n');
+
+            // Wait for CLI to process
+            await new Promise(resolve => setTimeout(resolve, 10000));
+
+            // Check for token
+            const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+            if (tokenMatch) {
+              setupToken = tokenMatch[0];
+              process.env.CLAUDE_CODE_OAUTH_TOKEN = setupToken;
+
+              // Close browsers and clean up
+              await magicPage.close();
+              await authBrowser.close();
+              authBrowser = null;
+              authPage = null;
+
+              return res.json({
+                status: 'success',
+                token: setupToken,
+                message: 'Token captured! OAuth complete via consent page.',
+                hint: 'Test with POST /api/run-agent',
+              });
+            }
+          }
+        }
+      }
+
+      // Close magic page
+      await magicPage.close();
+
+      // Check for token one more time
+      const tokenMatch = setupOutput.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+      if (tokenMatch) {
+        setupToken = tokenMatch[0];
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = setupToken;
+
+        await authBrowser.close();
+        authBrowser = null;
+        authPage = null;
+
+        return res.json({
+          status: 'success',
+          token: setupToken,
+          message: 'Token captured!',
+          hint: 'Test with POST /api/run-agent',
+        });
+      }
+
+      return res.json({
+        status: 'pending',
+        finalUrl,
+        screenshotUrl: '/auth-final.png',
+        message: 'Clicked Authorize but no token captured. Check screenshots.',
+        setupOutput: setupOutput.slice(-500),
+      });
+    }
+
+    // Otherwise, extract the verification code (6-digit number) for the old flow
     const verificationCodeMatch = pageText.match(/(\d{6})/);
     if (!verificationCodeMatch) {
       await magicPage.close();
       return res.status(500).json({
-        error: 'Could not find verification code on magic link page',
+        error: 'Could not find verification code or Authorize button on magic link page',
         screenshotUrl: '/magic-link-result.png',
         pageText: pageText.substring(0, 500),
       });
