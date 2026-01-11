@@ -5,6 +5,9 @@
  */
 
 import { spawn } from 'child_process';
+import { writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // Pre-warm flag to avoid repeated cold starts
 let preWarmed = false;
@@ -63,19 +66,39 @@ export async function runClaudeCode(
       claudeArgs.push('--system-prompt', systemPrompt);
     }
 
-    claudeArgs.push(prompt);
+    // For long prompts with special chars, use a temp file
+    // This avoids shell escaping issues
+    let promptFile: string | null = null;
+    if (prompt.length > 500 || prompt.includes('\n') || prompt.includes('"') || prompt.includes("'")) {
+      promptFile = join(tmpdir(), `claude-prompt-${Date.now()}.txt`);
+      writeFileSync(promptFile, prompt);
+      // Use cat to pipe file content to claude via shell
+    } else {
+      claudeArgs.push(prompt);
+    }
 
     const hasToken = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
     console.log(`[ClaudeRunner] Running with model: ${model}`);
     console.log(`[ClaudeRunner] OAuth token present: ${hasToken}`);
-    console.log(`[ClaudeRunner] Prompt: ${prompt.substring(0, 100)}...`);
+    console.log(`[ClaudeRunner] Prompt length: ${prompt.length}, using file: ${!!promptFile}`);
+    console.log(`[ClaudeRunner] Prompt preview: ${prompt.substring(0, 100)}...`);
 
-    // Try unbuffer first (creates a PTY), fall back to direct spawn
-    // unbuffer is from the 'expect' package
-    const useUnbuffer = process.env.USE_UNBUFFER !== 'false';
-
+    // Build the command - if using file, pipe it to claude
     let child;
-    if (useUnbuffer) {
+    if (promptFile) {
+      // Use bash to pipe file content to claude
+      const bashCmd = `cat '${promptFile}' | claude ${claudeArgs.map(a => `'${a}'`).join(' ')}`;
+      child = spawn('unbuffer', ['bash', '-c', bashCmd], {
+        cwd: workingDir,
+        env: {
+          ...process.env,
+          CI: 'true',
+          TERM: 'xterm-256color',
+          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } else {
       // unbuffer creates a pseudo-TTY which Claude CLI needs
       child = spawn('unbuffer', ['claude', ...claudeArgs], {
         cwd: workingDir,
@@ -87,18 +110,9 @@ export async function runClaudeCode(
         },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-    } else {
-      // Direct spawn (only works when stdin is a TTY)
-      child = spawn('claude', claudeArgs, {
-        cwd: workingDir,
-        env: {
-          ...process.env,
-          CI: 'true',
-          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
-        },
-        stdio: ['inherit', 'pipe', 'pipe'],
-      });
     }
+
+    child.stdin?.end();
 
     let stdout = '';
     let stderr = '';
@@ -113,6 +127,7 @@ export async function runClaudeCode(
 
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
+      if (promptFile) try { unlinkSync(promptFile); } catch {}
       resolve({
         success: false,
         output: cleanOutput(stdout),
@@ -122,6 +137,7 @@ export async function runClaudeCode(
 
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (promptFile) try { unlinkSync(promptFile); } catch {}
 
       const output = cleanOutput(stdout);
 
@@ -144,16 +160,8 @@ export async function runClaudeCode(
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      if (promptFile) try { unlinkSync(promptFile); } catch {}
       console.error(`[ClaudeRunner] Spawn error:`, err);
-
-      // If unbuffer failed, try without it
-      if (useUnbuffer && err.message.includes('ENOENT')) {
-        console.log('[ClaudeRunner] unbuffer not found, trying direct spawn...');
-        process.env.USE_UNBUFFER = 'false';
-        runClaudeCode(prompt, options).then(resolve);
-        return;
-      }
-
       resolve({
         success: false,
         output: '',
