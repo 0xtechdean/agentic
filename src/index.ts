@@ -213,8 +213,8 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
     setupToken = '';
     setupAuthUrl = null;
 
-    // Start Claude setup-token process
-    setupProcess = spawn('unbuffer', ['-p', 'claude', 'setup-token'], {
+    // Start Claude setup-token process with script for proper PTY handling
+    setupProcess = spawn('script', ['-q', '/dev/null', 'claude', 'setup-token'], {
       env: {
         ...process.env,
         CI: 'true',
@@ -778,9 +778,9 @@ app.get('/api/claude-setup/start', async (req, res) => {
     unlinkSync('/tmp/claude-auth-url.txt');
   } catch {}
 
-  // Run claude setup-token with unbuffer for TTY
-  // stdin will be available for sending the code
-  setupProcess = spawn('unbuffer', ['-p', 'claude', 'setup-token'], {
+  // Run claude setup-token with script command for proper PTY handling
+  // script -q creates a pseudo-TTY that properly handles stdin
+  setupProcess = spawn('script', ['-q', '/dev/null', 'claude', 'setup-token'], {
     env: {
       ...process.env,
       CI: 'true',
