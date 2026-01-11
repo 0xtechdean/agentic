@@ -28,6 +28,8 @@ const orchestrator = new AgentOrchestrator({
 
 // Claude CLI setup - run setup-token from server and capture the token
 let setupProcess: ReturnType<typeof import('child_process').spawn> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let ptyProcess: any = null;  // node-pty IPty process
 let setupOutput = '';
 let setupToken = '';
 let setupPort: number | null = null;
@@ -213,41 +215,44 @@ app.post('/api/claude-setup/browser-auth', express.json(), async (req, res) => {
     setupToken = '';
     setupAuthUrl = null;
 
-    // Start Claude setup-token with unbuffer - we'll handle the code sending separately
-    setupProcess = spawn('unbuffer', ['-p', 'claude', 'setup-token'], {
+    // Start Claude setup-token with node-pty for proper PTY support
+    const pty = await import('node-pty');
+    ptyProcess = pty.spawn('claude', ['setup-token'], {
+      name: 'xterm-256color',
+      cols: 200,
+      rows: 30,
+      cwd: process.cwd(),
       env: {
         ...process.env,
         CI: 'true',
-        TERM: 'dumb',
+        TERM: 'xterm-256color',
         DISPLAY: '',
-        COLUMNS: '200',
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      } as { [key: string]: string },
     });
 
-    setupProcess.stdout?.on('data', (data) => {
-      const chunk = data.toString();
-      setupOutput += chunk;
-      console.log('[BrowserAuth]', chunk.substring(0, 200));
+    // Also set setupProcess for compatibility checks
+    setupProcess = { stdin: { write: (data: string) => ptyProcess?.write(data) } } as unknown as ReturnType<typeof import('child_process').spawn>;
+
+    ptyProcess.onData((data: string) => {
+      setupOutput += data;
+      console.log('[BrowserAuth]', data.substring(0, 200));
 
       // Capture auth URL
-      const urlMatch = chunk.match(/https:\/\/claude\.ai\/oauth\/authorize\?[^\s\n]*state=[a-zA-Z0-9_-]+/);
+      const urlMatch = data.match(/https:\/\/claude\.ai\/oauth\/authorize\?[^\s\n]*state=[a-zA-Z0-9_-]+/);
       if (urlMatch && !setupAuthUrl) {
         setupAuthUrl = urlMatch[0];
         console.log('[BrowserAuth] Auth URL captured');
       }
 
       // Capture token
-      const tokenMatch = chunk.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
+      const tokenMatch = data.match(/sk-ant-oat[a-zA-Z0-9_-]+/);
       if (tokenMatch) {
         setupToken = tokenMatch[0];
         console.log('[BrowserAuth] Token captured!');
       }
     });
 
-    setupProcess.stderr?.on('data', (data) => {
-      setupOutput += data.toString();
-    });
+    // node-pty combines stdout and stderr, no need for separate handler
 
     // Wait for auth URL to appear
     let attempts = 0;
@@ -503,8 +508,10 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             console.log('[BrowserAuth] CLI ready after', waitAttempts, 'attempts');
             console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
 
-            // Send code with just newline
-            setupProcess.stdin.write(authCode + '\r\n');
+            // Send code via PTY with carriage return
+            if (ptyProcess) {
+              ptyProcess.write(authCode + '\r');
+            }
 
             // Wait for CLI to process - poll every 2 seconds for up to 10 min
             let tokenMatch = null;
@@ -694,8 +701,10 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
             console.log('[BrowserAuth] CLI ready after', waitAttempts, 'attempts');
             console.log('[BrowserAuth] Sending auth code to CLI:', authCode);
 
-            // Send code with just newline
-            setupProcess.stdin.write(authCode + '\r\n');
+            // Send code via PTY with carriage return
+            if (ptyProcess) {
+              ptyProcess.write(authCode + '\r');
+            }
 
             // Wait for CLI to process - poll every 2 seconds for up to 10 min
             let tokenMatch = null;
@@ -951,10 +960,11 @@ app.get('/api/claude-setup/status', async (req, res) => {
 });
 
 app.post('/api/claude-setup/stop', (req, res) => {
-  if (setupProcess) {
-    setupProcess.kill();
-    setupProcess = null;
+  if (ptyProcess) {
+    ptyProcess.kill();
+    ptyProcess = null;
   }
+  setupProcess = null;
   // Reset all state
   setupOutput = '';
   setupToken = '';
@@ -979,12 +989,12 @@ app.post('/api/claude-setup/complete-with-code', express.json(), async (req, res
   const { homedir } = await import('os');
   const { join } = await import('path');
 
-  // Use existing setupProcess if available (from browser-auth)
-  if (setupProcess && setupProcess.stdin) {
-    console.log('[Setup] Using existing CLI process, sending code:', code.substring(0, 30) + '...');
+  // Use existing ptyProcess if available (from browser-auth)
+  if (ptyProcess) {
+    console.log('[Setup] Using existing PTY process, sending code:', code.substring(0, 30) + '...');
 
-    // Send code to existing CLI
-    setupProcess.stdin.write(code + '\r\n');
+    // Send code to existing CLI via PTY
+    ptyProcess.write(code + '\r');
 
     // Wait for token to appear
     let tokenFound = false;
@@ -1151,24 +1161,19 @@ app.post('/api/claude-setup/send-code', express.json(), async (req, res) => {
     return res.status(400).json({ error: 'Code is required' });
   }
 
-  if (!setupProcess || !setupProcess.stdin) {
+  if (!ptyProcess) {
     return res.status(400).json({
-      error: 'No setup process running',
-      hint: 'Start the setup first with GET /api/claude-setup/start',
+      error: 'No PTY process running',
+      hint: 'Start the setup first with POST /api/claude-setup/browser-auth',
     });
   }
 
-  console.log('[Setup] Sending code to CLI stdin:', code.substring(0, 20) + '...');
+  console.log('[Setup] Sending code to PTY:', code.substring(0, 20) + '...');
 
   try {
-    // Send the code followed by newline, then flush
-    const written = setupProcess.stdin.write(code + '\r', 'utf8');
-    console.log('[Setup] Write returned:', written);
-
-    // Ensure the write is flushed
-    if (!written) {
-      await new Promise(resolve => setupProcess!.stdin!.once('drain', resolve));
-    }
+    // Send the code via PTY
+    ptyProcess.write(code + '\r');
+    console.log('[Setup] Code sent to PTY');
 
     // Wait a moment for the CLI to process
     await new Promise(resolve => setTimeout(resolve, 5000));
