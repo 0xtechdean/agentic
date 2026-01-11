@@ -467,8 +467,8 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
     const verificationCode = verificationCodeMatch[1];
     console.log('[BrowserAuth] Found verification code:', verificationCode);
 
-    // Step 2: Go to the original auth URL and enter the verification code
-    console.log('[BrowserAuth] Navigating to auth URL to enter verification code...');
+    // Step 2: Go to the original auth URL
+    console.log('[BrowserAuth] Navigating to auth URL...');
     await page.goto(setupAuthUrl as string, { waitUntil: 'networkidle2', timeout: 60000 });
 
     // Wait for Cloudflare
@@ -484,45 +484,97 @@ app.post('/api/claude-setup/browser-magic-link', express.json(), async (req, res
 
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Click on "Enter verification code" link
+    // Step 3: Enter the email first (new browser session needs email entry)
+    console.log('[BrowserAuth] Entering email on auth page...');
+    try {
+      await page.waitForSelector('#email', { timeout: 10000 });
+
+      // Extract email from the magic link (base64 encoded after the colon)
+      const emailMatch = magicLink.match(/:([A-Za-z0-9+/=]+)$/);
+      let email = 'dean@othentic.xyz'; // default
+      if (emailMatch) {
+        try {
+          email = Buffer.from(emailMatch[1], 'base64').toString('utf-8');
+        } catch {
+          // Use default
+        }
+      }
+
+      console.log('[BrowserAuth] Using email:', email);
+      await page.type('#email', email, { delay: 50 });
+
+      // Click submit
+      await page.click('button[type="submit"]');
+
+      // Wait for the "magic link sent" page
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    } catch (e) {
+      console.log('[BrowserAuth] Email entry failed, may already be on verification page:', e);
+    }
+
+    // Take screenshot after email entry
+    let afterEmailScreenshot = await page.screenshot({ encoding: 'base64' });
+    writeFileSync(join(__dirname, '../public/auth-after-email.png'), Buffer.from(afterEmailScreenshot, 'base64'));
+
+    // Step 4: Click on "Enter verification code" link
     console.log('[BrowserAuth] Looking for verification code option...');
     try {
-      // Look for the link/button to enter verification code
-      const verifyLink = await page.$('a:has-text("verification code"), button:has-text("verification code"), [href*="verification"]');
-      if (verifyLink) {
-        await verifyLink.click();
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      } else {
-        // Try clicking by text content
-        await page.evaluate(() => {
-          const links = Array.from(document.querySelectorAll('a, button'));
-          const verifyLink = links.find(el => el.textContent?.toLowerCase().includes('verification code'));
-          if (verifyLink) (verifyLink as HTMLElement).click();
-        });
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
+      // Try clicking by text content - look for "verification code" text
+      await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a, button, span'));
+        const verifyLink = links.find(el => el.textContent?.toLowerCase().includes('verification code'));
+        if (verifyLink) (verifyLink as HTMLElement).click();
+      });
+      await new Promise(resolve => setTimeout(resolve, 3000));
     } catch (e) {
       console.log('[BrowserAuth] Could not find verification code link:', e);
     }
 
-    // Take screenshot after clicking
+    // Take screenshot after clicking verification link
     const afterClickScreenshot = await page.screenshot({ encoding: 'base64' });
     writeFileSync(join(__dirname, '../public/auth-verify-page.png'), Buffer.from(afterClickScreenshot, 'base64'));
 
-    // Try to find and fill in verification code input
-    console.log('[BrowserAuth] Entering verification code...');
+    // Step 5: Enter verification code
+    console.log('[BrowserAuth] Entering verification code:', verificationCode);
     try {
-      // Wait for input field
-      await page.waitForSelector('input[type="text"], input[type="number"], input[inputmode="numeric"]', { timeout: 10000 });
+      // Wait for input field - could be multiple individual digit inputs or one text input
+      await page.waitForSelector('input', { timeout: 10000 });
 
-      // Type the verification code
-      await page.type('input[type="text"], input[type="number"], input[inputmode="numeric"]', verificationCode, { delay: 100 });
+      // Check if there are multiple digit inputs (common for verification codes)
+      const inputs = await page.$$('input');
+      console.log('[BrowserAuth] Found', inputs.length, 'input fields');
+
+      if (inputs.length >= 6) {
+        // Multiple single-digit inputs - type one digit in each
+        console.log('[BrowserAuth] Entering code in individual digit inputs...');
+        for (let i = 0; i < Math.min(6, inputs.length); i++) {
+          await inputs[i].type(verificationCode[i], { delay: 50 });
+        }
+      } else {
+        // Single input - type the whole code
+        console.log('[BrowserAuth] Entering code in single input...');
+        const codeInput = await page.$('input[type="text"], input[type="number"], input[inputmode="numeric"], input:not([type="email"])');
+        if (codeInput) {
+          await codeInput.type(verificationCode, { delay: 100 });
+        }
+      }
 
       // Click submit/continue button
       await new Promise(resolve => setTimeout(resolve, 1000));
       const submitBtn = await page.$('button[type="submit"]');
       if (submitBtn) {
         await submitBtn.click();
+      } else {
+        // Try any button that looks like continue
+        await page.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll('button'));
+          const continueBtn = buttons.find(btn =>
+            btn.textContent?.toLowerCase().includes('continue') ||
+            btn.textContent?.toLowerCase().includes('verify') ||
+            btn.textContent?.toLowerCase().includes('submit')
+          );
+          if (continueBtn) continueBtn.click();
+        });
       }
 
       // Wait for redirect to callback
